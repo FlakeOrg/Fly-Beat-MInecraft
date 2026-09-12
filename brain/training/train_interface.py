@@ -59,20 +59,39 @@ def unflatten_params(theta: np.ndarray, encoder: SensoryEncoder, decoder: MotorD
 
 def run_es(
     theta0: np.ndarray,
-    fitness_fn: Callable[[np.ndarray], float],
+    fitness_fn: Callable[[np.ndarray], float] | None,
     config: ESConfig,
+    batch_fitness_fn: Callable[[list[np.ndarray]], list[float]] | None = None,
 ) -> ESResult:
+    """`fitness_fn` evaluates one theta at a time (the simple case - see
+    the proxy task below). `batch_fitness_fn`, if given, takes the whole
+    list of perturbed thetas for a generation at once and returns their
+    fitnesses in the same order - this is the hook for real parallelism
+    (see training/live_rollout.py + multi_bridge.py): the caller can
+    dispatch that list across many live bot-bridge instances concurrently
+    instead of evaluating them one at a time. Exactly one of the two must
+    be given.
+    """
+    if (fitness_fn is None) == (batch_fitness_fn is None):
+        raise ValueError("exactly one of fitness_fn or batch_fitness_fn must be given")
+
+    def evaluate_many(thetas: list[np.ndarray]) -> list[float]:
+        if batch_fitness_fn is not None:
+            return batch_fitness_fn(thetas)
+        return [fitness_fn(t) for t in thetas]
+
     rng = np.random.default_rng(config.seed)
     theta = theta0.copy()
-    best_theta, best_fitness = theta.copy(), fitness_fn(theta)
+    best_theta, best_fitness = theta.copy(), evaluate_many([theta])[0]
     history = [best_fitness]
 
     for gen in range(config.generations):
         noise = rng.standard_normal((config.population_size, theta.size))
-        fitnesses = np.empty(2 * config.population_size)
+        candidates = []
         for i in range(config.population_size):
-            fitnesses[2 * i] = fitness_fn(theta + config.sigma * noise[i])
-            fitnesses[2 * i + 1] = fitness_fn(theta - config.sigma * noise[i])
+            candidates.append(theta + config.sigma * noise[i])
+            candidates.append(theta - config.sigma * noise[i])
+        fitnesses = np.array(evaluate_many(candidates))
 
         gen_best_idx = np.argmax(fitnesses)
         gen_best_fitness = fitnesses[gen_best_idx]
@@ -189,3 +208,14 @@ if __name__ == "__main__":
     result = run_es(theta0, fitness_fn, ESConfig(generations=25, population_size=15, sigma=0.5, lr=0.3, seed=0))
 
     print(f"\nfinal trained fitness: {fitness_fn(result.theta):.3f} (best seen: {result.best_fitness:.3f})")
+
+    unflatten_params(result.theta, encoder, decoder)
+    out_path = data_dir.parent / "trained_interface.npz"
+    np.savez(
+        out_path,
+        encoder_weights=encoder.weights,
+        decoder_weights=decoder.weights,
+        input_idx=input_idx,
+        output_idx=output_idx,
+    )
+    print(f"saved trained weights to {out_path}")

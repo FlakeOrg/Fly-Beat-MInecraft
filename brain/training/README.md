@@ -42,14 +42,45 @@ structure (participation ratio ~5.3 across 15 conditions): here, a trained
 readout demonstrably *uses* that structure to do a concrete task better
 than random weights do.
 
-## What's not yet done
+## Live reward, against the real game — implemented and run
 
-This is still a proxy task with 5 hand-specified situations, not real
-Minecraft reward. The natural next step is a `fitness_fn` that runs an
-actual episode through `agent/loop.py` + bot-bridge and returns something
-like survival time / distance traveled / resources gathered - much slower
-per evaluation (real wall-clock Minecraft ticks, one server), so it'll need
-either a much smaller population/generation count, parallelizing rollouts
-across multiple local server instances, or both.
+`live_rollout.py` + `multi_bridge.py` + `train_live.py` are the live phase:
+real Minecraft episodes, not the proxy task. Important constraint the user
+was explicit about: **reward must be earned by the bot's own actions only**
+— no admin commands, no handed-out items, no teleports during training.
+`run_episode()` in `live_rollout.py` only ever reads observations and
+sends normal player-equivalent actions through bot-bridge; the fitness
+score is survival + health retained + distance traveled + resources
+actually gathered (measured as an inventory count increase over the
+episode), nothing else.
+
+`multi_bridge.py` launches N separate bot-bridge processes (each its own
+port + username, e.g. `FlyBrain0`, `FlyBrain1`, `FlyBrain2`), all joining
+the same running server — genuinely concurrent bots, not a simulated
+population. `run_es()` in `train_interface.py` was extended with an
+optional `batch_fitness_fn` (a whole generation's perturbed weight-sets at
+once, in addition to the original one-at-a-time `fitness_fn`) so
+`train_live.py` can dispatch a generation's population across the N live
+bots via a thread pool — many fly brains playing at once, all of their
+real, separately-earned outcomes combining into one shared weight update.
+
+**Real result** (`N_PARALLEL_BOTS=3`, 5 generations, population 4): fitness
+**2.413 → 5.139**, improving by generation 2 and holding stable afterward.
+Saved to `data/trained_interface_live.npz` (separate from
+`trained_interface.npz`, which is still the proxy-task result — this
+live-trained one hasn't had nearly enough generations/population to be
+assumed better yet).
+
+## What's honestly still true
+
+This was a small, first end-to-end validation that live parallel trial-
+and-error training works at all — not a training run anywhere near
+dragon-killing competence. Real Minecraft ticks can't be sped up, so each
+episode costs real wall-clock time regardless of how many bots run in
+parallel; getting meaningfully further needs far more generations/
+population/parallel bots than fits in one interactive session, most
+realistically as a long unattended run. Scale `N_PARALLEL_BOTS` and
+`ESConfig`'s `generations`/`population_size` in `train_live.py` up once
+ready to commit to that.
 
 See [../../docs/architecture.md](../../docs/architecture.md).
