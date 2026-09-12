@@ -7,18 +7,18 @@ concurrently each generation, and all of their real, earned outcomes
 combine into one update - see live_rollout.py for exactly what "earned"
 means and multi_bridge.py for how the parallel bots are launched.
 
-Each real episode costs real, un-speed-up-able wall-clock Minecraft ticks,
-so this is deliberately much smaller in scale than train_interface.py's
-offline proxy-task run (25 generations x 30 evals, seconds total) - this
-is a first, honest end-to-end validation that live parallel trial-and-
-error training actually works, not a full training run to game-beating
-competence. Increase N_PARALLEL_BOTS / ESConfig generations/population
-once this is confirmed working, ideally left running unattended for far
-longer than one interactive session.
+Each real episode costs real, un-speed-up-able wall-clock Minecraft ticks.
+A first small run (3 bots, 5 generations, population 4) validated the
+mechanism end to end: fitness 2.413 -> 5.139 (see training/README.md).
+Current settings (5 bots, 200 generations, population 10) are a genuine
+long unattended run, not something to babysit interactively - checkpoints
+every generation via `on_generation` (data/trained_interface_live.npz),
+so it's safe to leave running and safe to interrupt.
 """
 
 from __future__ import annotations
 
+import queue
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,9 +35,22 @@ from training.live_rollout import run_episode  # noqa: E402
 from training.multi_bridge import launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
-N_PARALLEL_BOTS = 3
+N_PARALLEL_BOTS = 5
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUT_PATH = DATA_DIR / "trained_interface_live.npz"
+
+
+def save_weights(theta: np.ndarray, input_idx: np.ndarray, output_idx: np.ndarray, path: Path = OUT_PATH) -> None:
+    encoder = SensoryEncoder(input_idx, seed=0)
+    decoder = MotorDecoder(output_idx, seed=0)
+    unflatten_params(theta, encoder, decoder)
+    np.savez(
+        path,
+        encoder_weights=encoder.weights,
+        decoder_weights=decoder.weights,
+        input_idx=input_idx,
+        output_idx=output_idx,
+    )
 
 
 def main() -> None:
@@ -60,45 +73,58 @@ def main() -> None:
         worker_decoders = [MotorDecoder(output_idx, seed=0) for _ in bridges]
 
         def batch_fitness_fn(thetas: list[np.ndarray]) -> list[float]:
-            results = [0.0] * len(thetas)
-            with ThreadPoolExecutor(max_workers=len(bridges)) as pool:
-                futures = {}
-                for i, theta in enumerate(thetas):
-                    worker = i % len(bridges)
-                    future = pool.submit(
-                        run_episode,
-                        theta,
-                        worker_encoders[worker],
-                        worker_decoders[worker],
-                        weights,
-                        bridges[worker].url,
+            # A plain ThreadPoolExecutor with `worker = i % N` does NOT
+            # guarantee two candidates assigned the same worker index never
+            # run concurrently: as soon as any thread frees up, the pool
+            # picks up the next queued task in submission order regardless
+            # of which worker index it was meant for, so a fast-finishing
+            # episode can free a thread that then picks up the *next*
+            # candidate for a worker slot whose *previous* candidate is
+            # still running - two threads would then hit the same bridge
+            # and clobber the same shared encoder/decoder mid-evaluation.
+            # A fixed pool of persistent per-worker loops pulling from one
+            # shared queue is what actually guarantees exclusivity.
+            results: list[float | None] = [None] * len(thetas)
+            work_queue: queue.Queue = queue.Queue()
+            for i, theta in enumerate(thetas):
+                work_queue.put((i, theta))
+
+            def worker_loop(worker_idx: int) -> None:
+                while True:
+                    try:
+                        i, theta = work_queue.get_nowait()
+                    except queue.Empty:
+                        return
+                    results[i] = run_episode(
+                        theta, worker_encoders[worker_idx], worker_decoders[worker_idx], weights, bridges[worker_idx].url
                     )
-                    futures[future] = i
+
+            with ThreadPoolExecutor(max_workers=len(bridges)) as pool:
+                futures = [pool.submit(worker_loop, w) for w in range(len(bridges))]
                 for future in futures:
-                    results[futures[future]] = future.result()
+                    future.result()
             return results
+
+        def checkpoint(gen: int, best_theta: np.ndarray, best_fitness: float) -> None:
+            # A long unattended run costs real, unrecoverable wall-clock
+            # time - only saving at the very end means one crash partway
+            # through loses all of it. Cheap to do every generation (a few
+            # hundred KB write), so no need to throttle it.
+            save_weights(best_theta, input_idx, output_idx)
+            print(f"checkpointed generation {gen} (best_fitness={best_fitness:.3f}) to {OUT_PATH}")
 
         result = run_es(
             theta0,
             fitness_fn=None,
-            config=ESConfig(generations=5, population_size=4, sigma=0.5, lr=0.3, seed=0),
+            config=ESConfig(generations=200, population_size=10, sigma=0.5, lr=0.3, seed=0),
             batch_fitness_fn=batch_fitness_fn,
+            on_generation=checkpoint,
         )
 
         print(f"\nfinal live-trained fitness (best seen): {result.best_fitness:.3f}")
         print(f"fitness history: {[round(f, 3) for f in result.history]}")
-
-        final_encoder = SensoryEncoder(input_idx, seed=0)
-        final_decoder = MotorDecoder(output_idx, seed=0)
-        unflatten_params(result.theta, final_encoder, final_decoder)
-        np.savez(
-            OUT_PATH,
-            encoder_weights=final_encoder.weights,
-            decoder_weights=final_decoder.weights,
-            input_idx=input_idx,
-            output_idx=output_idx,
-        )
-        print(f"saved live-trained weights to {OUT_PATH}")
+        save_weights(result.theta, input_idx, output_idx)
+        print(f"saved final live-trained weights to {OUT_PATH}")
 
     finally:
         print("stopping bot-bridge instances...")

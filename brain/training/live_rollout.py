@@ -18,6 +18,7 @@ reward, not for the bulk of iteration during algorithm development.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -51,9 +52,29 @@ def run_episode(
 ) -> float:
     """Runs one real episode against a live bot-bridge instance and returns
     an earned reward. Mutates `encoder`/`decoder` in place (via
-    unflatten_params) to whatever `theta` this evaluation is for."""
-    import time
+    unflatten_params) to whatever `theta` this evaluation is for.
 
+    Never raises: a long unattended run must survive one worker's bot-
+    bridge process crashing or refusing a connection without taking down
+    the whole training run - such a rollout just scores 0.0 rather than
+    propagating the exception.
+    """
+    try:
+        return _run_episode_inner(theta, encoder, decoder, weights, bridge_url, use_task_manager, episode_steps)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
+        print(f"rollout against {bridge_url} failed ({exc!r}); scoring 0.0")
+        return 0.0
+
+
+def _run_episode_inner(
+    theta: np.ndarray,
+    encoder: SensoryEncoder,
+    decoder: MotorDecoder,
+    weights,
+    bridge_url: str,
+    use_task_manager: bool,
+    episode_steps: int,
+) -> float:
     unflatten_params(theta, encoder, decoder)
     net = LIFNetwork(weights, LIF_PARAMS)
     task_manager = TaskManager() if use_task_manager else None

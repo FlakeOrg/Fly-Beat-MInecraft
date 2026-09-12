@@ -62,6 +62,7 @@ def run_es(
     fitness_fn: Callable[[np.ndarray], float] | None,
     config: ESConfig,
     batch_fitness_fn: Callable[[list[np.ndarray]], list[float]] | None = None,
+    on_generation: Callable[[int, np.ndarray, float], None] | None = None,
 ) -> ESResult:
     """`fitness_fn` evaluates one theta at a time (the simple case - see
     the proxy task below). `batch_fitness_fn`, if given, takes the whole
@@ -71,6 +72,12 @@ def run_es(
     dispatch that list across many live bot-bridge instances concurrently
     instead of evaluating them one at a time. Exactly one of the two must
     be given.
+
+    `on_generation(gen, best_theta_so_far, best_fitness_so_far)`, if given,
+    fires after every generation - use it to checkpoint progress to disk.
+    A long live-reward run costs real, unrecoverable wall-clock time; only
+    saving at the very end means one crash partway through loses all of
+    it.
     """
     if (fitness_fn is None) == (batch_fitness_fn is None):
         raise ValueError("exactly one of fitness_fn or batch_fitness_fn must be given")
@@ -109,6 +116,8 @@ def run_es(
 
         history.append(best_fitness)
         print(f"gen {gen:3d}: best_fitness_so_far={best_fitness:.3f} gen_mean={fitnesses.mean():.3f}")
+        if on_generation is not None:
+            on_generation(gen, best_theta, best_fitness)
 
     return ESResult(theta=best_theta, best_fitness=best_fitness, history=history)
 
