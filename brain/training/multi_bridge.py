@@ -9,11 +9,21 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
+
 BOT_BRIDGE_DIR = Path(__file__).resolve().parent.parent.parent / "bot-bridge"
 LOG_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "multi_bridge_logs"
+
+# Registered once via scripts/generate_fly_skins.py + a one-time
+# `/sr createcustom` run against each raw.githubusercontent.com URL (see
+# assets/fly_skins/) - purely cosmetic, unrelated to training/reward.
+FLY_SKIN_VARIANTS = ["housefly", "bluebottle", "greenbottle", "fruitfly", "firefly"]
 
 
 class BridgeInstance:
@@ -67,6 +77,23 @@ def wait_until_all_spawned(instances: list[BridgeInstance], timeout_s: float = 6
     if pending:
         names = [instances[i].username for i in pending]
         raise TimeoutError(f"bridges never reported spawned: {names}")
+
+
+def assign_fly_skins(instances: list[BridgeInstance]) -> None:
+    """Gives each bot one of the generated fly skins, cycling through the
+    variants so a run of more bots than variants still looks varied.
+    Skin identity has zero effect on behavior/reward - purely cosmetic,
+    sent once right after spawn via the bot's own `/skin set` chat command
+    (self-skin-set needs no special permission, unlike setting another
+    player's skin - see scripts/apply_fly_skins.py for why that path was
+    used to register the skins in the first place)."""
+    for i, instance in enumerate(instances):
+        skin = FLY_SKIN_VARIANTS[i % len(FLY_SKIN_VARIANTS)]
+        try:
+            with BridgeClient(instance.url) as client:
+                client.do_action({"type": "chat", "message": f"/skin set {skin}"})
+        except BridgeError as exc:
+            print(f"failed to set skin for {instance.username}: {exc}")
 
 
 def stop_all(instances: list[BridgeInstance]) -> None:

@@ -33,7 +33,7 @@ from agent.loop import load_real_graph  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
 from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from training.live_rollout import run_episode  # noqa: E402
-from training.multi_bridge import launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
+from training.multi_bridge import assign_fly_skins, launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
 N_PARALLEL_BOTS = 20
@@ -66,6 +66,7 @@ def main() -> None:
         wait_until_all_spawned(bridges)
         print("all bridges spawned:", [b.username for b in bridges])
         time.sleep(2.0)  # let each bot fully settle into the world before scoring starts
+        assign_fly_skins(bridges)
 
         # One encoder/decoder pair per worker slot so concurrent rollouts
         # (each writing its assigned theta into them via run_episode's
