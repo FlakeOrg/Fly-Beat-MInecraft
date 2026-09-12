@@ -22,26 +22,50 @@ const MC_VERSION = process.env.MC_VERSION || false; // false = auto-detect
 const MC_AUTH = process.env.MC_AUTH || "offline";
 const BRIDGE_PORT = Number(process.env.BRIDGE_PORT || 8081);
 
-const bot = mineflayer.createBot({
-  host: MC_HOST,
-  port: MC_PORT,
-  username: MC_USERNAME,
-  version: MC_VERSION,
-  auth: MC_AUTH,
-});
+const RECONNECT_DELAY_MS = 3000;
 
+// Mutable, reassigned on every (re)connect - a game connection can end for
+// all sorts of reasons outside our control (e.g. a stale/invalid entity ID
+// getting the bot kicked - found live: a target already gone by the time
+// an attack command reached the server). Without reconnecting, bot-bridge
+// would otherwise keep answering getObservation with silently stale,
+// frozen data from a bot that's no longer actually in the world.
+let bot = null;
 let mcData = null;
+let connected = false;
 
-bot.once("spawn", () => {
-  mcData = minecraftData(bot.version);
-  console.log(`[bot-bridge] spawned as ${MC_USERNAME} on ${MC_HOST}:${MC_PORT} (mc ${bot.version})`);
-  broadcastEvent("spawn", {});
-});
+function connectBot() {
+  connected = false;
+  bot = mineflayer.createBot({
+    host: MC_HOST,
+    port: MC_PORT,
+    username: MC_USERNAME,
+    version: MC_VERSION,
+    auth: MC_AUTH,
+  });
 
-bot.on("death", () => broadcastEvent("death", {}));
-bot.on("kicked", (reason) => broadcastEvent("kicked", { reason }));
-bot.on("end", (reason) => broadcastEvent("end", { reason }));
-bot.on("error", (err) => console.error("[bot-bridge] bot error:", err));
+  bot.once("spawn", () => {
+    mcData = minecraftData(bot.version);
+    connected = true;
+    console.log(`[bot-bridge] spawned as ${MC_USERNAME} on ${MC_HOST}:${MC_PORT} (mc ${bot.version})`);
+    broadcastEvent("spawn", {});
+  });
+
+  bot.on("death", () => broadcastEvent("death", {}));
+  bot.on("kicked", (reason) => {
+    console.log(`[bot-bridge] kicked: ${reason}`);
+    broadcastEvent("kicked", { reason });
+  });
+  bot.on("end", (reason) => {
+    connected = false;
+    console.log(`[bot-bridge] connection ended (${reason}) - reconnecting in ${RECONNECT_DELAY_MS}ms`);
+    broadcastEvent("end", { reason });
+    setTimeout(connectBot, RECONNECT_DELAY_MS);
+  });
+  bot.on("error", (err) => console.error("[bot-bridge] bot error:", err));
+}
+
+connectBot();
 
 const ACTION_TIMEOUT_MS = 10000;
 
@@ -81,9 +105,10 @@ wss.on("connection", (ws) => {
     try {
       let result;
       if (method === "getObservation") {
+        if (!connected) throw new Error("bot is not currently connected (reconnecting)");
         result = buildObservation(bot);
       } else if (method === "doAction") {
-        if (!bot.entity) throw new Error("bot has not spawned yet");
+        if (!connected || !bot.entity) throw new Error("bot is not currently connected (reconnecting)");
         // Blanket safety net so a stuck/never-settling action (mineflayer
         // promises don't always resolve/reject cleanly, e.g. a dig whose
         // target moves out of reach - see actions.js's own dig-specific

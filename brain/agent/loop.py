@@ -1,15 +1,18 @@
-"""The real-time control loop (M4): observation -> encoder -> sim step(s) ->
+"""The real-time control loop: observation -> encoder -> sim step(s) ->
 decoder -> action, tying bot-bridge to the LIF network.
 
-Still runs on the *synthetic* stand-in graph (sim/synthetic.py), not the
-real hemibrain connectome - that swap happens once a NEUPRINT_TOKEN is
-available (see connectome/fetch_hemibrain.py) and its own syn_scale/
-b_adapt/tau_adapt sweep has been done against the real weight distribution
-(see connectome/README.md). This milestone validates plumbing end to end
-(a real observation can drive the network and the network's output can
-drive the bot), not intelligence - the hand-built encoder/decoder weights
-have no reason to produce good Minecraft play yet; that's M5 (trained
-weights) and M6 (a real task manager on top).
+Runs on the real hemibrain connectome (connectome/fetch_hemibrain.py +
+graph.py) with the tuned regime found while wiring it up - see
+connectome/README.md for how syn_scale/b_adapt/tau_adapt/depression_frac
+were chosen, and for the honest caveat that this network settles into
+persistent activity rather than a clean reflex arc (still carries real,
+per-input-distinguishable structure - see the participation-ratio finding
+there, and training/README.md's proxy-task result).
+
+If `data/trained_interface.npz` exists (written by
+training/train_interface.py), the encoder/decoder use those ES-trained
+weights instead of the hand-built random init - use whichever the last
+training run produced.
 """
 
 from __future__ import annotations
@@ -19,77 +22,156 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
+from agent.task_manager import TaskManager  # noqa: E402
+from connectome.graph import build_adjacency, identify_pools  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
 from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from sim.lif import LIFNetwork, LIFParams  # noqa: E402
-from sim.synthetic import make_synthetic_graph  # noqa: E402
 
-# Same tuned regime as sim/demo.py - see its comments for how these were found.
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+TRAINED_WEIGHTS_PATH = DATA_DIR / "trained_interface.npz"
+
+# Tuned against the real connectome - see connectome/README.md for how
+# these were found and what "tuned" means here (stable + input-sensitive,
+# not "behaves like a simple reflex arc" - it doesn't, at this scale).
 SIM_TICKS_PER_ACTION = 10
-SYN_SCALE = 4.0
-B_ADAPT = 0.4
-TAU_ADAPT = 40.0
-EXT_CURRENT_GAIN = 3.0
+LIF_PARAMS = LIFParams(syn_scale=1500.0, b_adapt=0.4, tau_adapt=40.0, depression_frac=0.5, tau_depression=30.0)
+INPUT_TYPE_PATTERN = r"^(LC|LT|LPLC|MeTu)"
+OUTPUT_TYPE_PATTERN = r"^DN"
+
+# mineflayer's entity "kind" for things that can actually be attacked -
+# excludes dropped items, projectiles, etc. (see the comment where this is
+# used: attacking one of those gets the bot kicked for "attacking an
+# invalid entity").
+ATTACKABLE_ENTITY_KINDS = {"Hostile mobs", "Passive mobs", "Player", "Water creature", "Ambient mobs"}
 
 
-def build_brain(n_neurons: int = 200, seed: int = 0) -> tuple[LIFNetwork, np.ndarray, np.ndarray]:
-    weights, input_idx, output_idx = make_synthetic_graph(
-        n_neurons=n_neurons,
-        p_connect=0.08,
-        weight_scale=1.0,
-        inhibitory_frac=0.2,
-        inhibitory_strength=2.0,
-        seed=seed,
-    )
-    net = LIFNetwork(weights, LIFParams(syn_scale=SYN_SCALE, b_adapt=B_ADAPT, tau_adapt=TAU_ADAPT))
-    return net, input_idx, output_idx
+def load_real_graph():
+    """Loads the real, degree-normalized hemibrain adjacency + pools.
+    Shared with training/live_rollout.py - the same graph the live control
+    loop uses is what gets trained against."""
+    neurons_df = pd.read_parquet(DATA_DIR / "hemibrain" / "neurons.parquet")
+    conn_df = pd.read_parquet(DATA_DIR / "hemibrain" / "connections.parquet")
+    weights, neuron_meta = build_adjacency(neurons_df, conn_df)
+
+    in_strength = np.abs(weights).sum(axis=1).A.flatten()
+    in_strength[in_strength == 0] = 1.0
+    norm_weights = weights.multiply(1.0 / in_strength[:, None]).tocsr()
+
+    input_idx, output_idx = identify_pools(neuron_meta, INPUT_TYPE_PATTERN, OUTPUT_TYPE_PATTERN)
+    return norm_weights, input_idx, output_idx
 
 
-def run(n_steps: int = 50, bridge_url: str = "ws://localhost:8081") -> None:
-    net, input_idx, output_idx = build_brain()
-    encoder = SensoryEncoder(input_idx, gain=EXT_CURRENT_GAIN)
-    decoder = MotorDecoder(output_idx)
+def build_brain() -> tuple[LIFNetwork, SensoryEncoder, MotorDecoder]:
+    weights, input_idx, output_idx = load_real_graph()
+    net = LIFNetwork(weights, LIF_PARAMS)
 
+    if TRAINED_WEIGHTS_PATH.exists():
+        saved = np.load(TRAINED_WEIGHTS_PATH)
+        assert np.array_equal(saved["input_idx"], input_idx), "trained weights don't match the current input pool"
+        assert np.array_equal(saved["output_idx"], output_idx), "trained weights don't match the current output pool"
+        encoder = SensoryEncoder(input_idx, weights=saved["encoder_weights"])
+        decoder = MotorDecoder(output_idx, weights=saved["decoder_weights"])
+        print(f"loaded trained weights from {TRAINED_WEIGHTS_PATH}")
+    else:
+        encoder = SensoryEncoder(input_idx)
+        decoder = MotorDecoder(output_idx)
+        print("no trained weights found - using hand-built random init")
+
+    return net, encoder, decoder
+
+
+def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", status_every: int = 10) -> None:
+    """Runs the control loop. `n_steps=None` runs until interrupted (Ctrl+C).
+
+    Each step, the task manager gets first say (task_manager.py): if it has
+    a specific scripted subgoal action (walk to this log and mine it, craft
+    this item, flee that threat), that's what runs. Only when it has
+    nothing specific to do does control fall through to the fly-brain's
+    trained reflexes - that's the intended division of labor, not a
+    fallback of convenience.
+    """
+    net, encoder, decoder = build_brain()
+    task_manager = TaskManager()
+    print(f"connectome: {net.n} neurons, {len(encoder.input_idx)} input, {len(decoder.output_idx)} output")
+
+    step = 0
     with BridgeClient(bridge_url) as client:
-        for step in range(n_steps):
-            observation = client.get_observation()
-            ext_current = encoder.encode(observation, net.n)
+        try:
+            while n_steps is None or step < n_steps:
+                try:
+                    observation = client.get_observation()
+                except BridgeError as e:
+                    # bot-bridge reconnects on its own after a kick/disconnect
+                    # (e.g. a stale entity ID at the moment of an attack) -
+                    # wait it out instead of crashing the whole control loop.
+                    print(f"observation unavailable ({e}), retrying in 2s...")
+                    time.sleep(2.0)
+                    continue
 
-            spike_window = np.zeros((SIM_TICKS_PER_ACTION, net.n))
-            for tick in range(SIM_TICKS_PER_ACTION):
-                spike_window[tick] = net.step(ext_current)
+                scripted_actions = task_manager.decide(observation)
+                if scripted_actions is not None:
+                    actions = {"scripted": task_manager.status()}
+                    for command in scripted_actions:
+                        try:
+                            client.do_action(command)
+                        except BridgeError:
+                            pass  # e.g. a dig/craft that's no longer valid this tick; try again next step
+                else:
+                    ext_current = encoder.encode(observation, net.n)
 
-            actions = decoder.decode(spike_window)
-            move_command = {"type": "move", **{k: actions.get(k, False) for k in ("forward", "left", "right", "jump")}}
-            client.do_action(move_command)
+                    spike_window = np.zeros((SIM_TICKS_PER_ACTION, net.n))
+                    for tick in range(SIM_TICKS_PER_ACTION):
+                        spike_window[tick] = net.step(ext_current)
 
-            if actions.get("attack"):
-                entities = sorted(observation["nearbyEntities"], key=lambda e: e["distance"])
-                if entities and entities[0]["distance"] <= 4.0:
+                    actions = decoder.decode(spike_window)
+                    move_command = {"type": "move", **{k: actions.get(k, False) for k in ("forward", "left", "right", "jump")}}
                     try:
-                        client.do_action({"type": "attack", "entityId": entities[0]["id"]})
+                        client.do_action(move_command)
                     except BridgeError:
-                        pass  # target may have died/left range between observation and action
+                        pass  # bot may have just been kicked/disconnected; next loop's get_observation will wait it out
 
-            if actions.get("mine_ahead"):
-                # best-effort: dig whatever's directly ahead at foot level, if anything
-                ahead = [b for b in observation["nearbyBlocks"] if b["y"] == 0 and abs(b["x"]) + abs(b["z"]) == 1]
-                if ahead:
+                    if actions.get("attack"):
+                        # Found live: picking the nearest entity regardless
+                        # of kind could target a dropped item, which the
+                        # server rejects as "attacking an invalid entity"
+                        # and kicks the bot for - restrict to attackable kinds.
+                        attackable = [e for e in observation["nearbyEntities"] if e.get("kind") in ATTACKABLE_ENTITY_KINDS]
+                        entities = sorted(attackable, key=lambda e: e["distance"])
+                        if entities and entities[0]["distance"] <= 4.0:
+                            try:
+                                client.do_action({"type": "attack", "entityId": entities[0]["id"]})
+                            except BridgeError:
+                                pass  # target may have died/left range between observation and action
+
+                    if actions.get("mine_ahead"):
+                        # best-effort: dig whatever's directly ahead at foot level, if anything
+                        ahead = [b for b in observation["nearbyBlocks"] if b["y"] == 0 and abs(b["x"]) + abs(b["z"]) == 1]
+                        if ahead:
+                            pos = observation["position"]
+                            b = ahead[0]
+                            try:
+                                client.do_action({"type": "dig", "x": pos["x"] + b["x"], "y": pos["y"], "z": pos["z"] + b["z"]})
+                            except BridgeError:
+                                pass  # dig can fail for lots of legitimate reasons (out of reach, unbreakable, etc.)
+
+                if step % status_every == 0:
                     pos = observation["position"]
-                    b = ahead[0]
-                    try:
-                        client.do_action({"type": "dig", "x": pos["x"] + b["x"], "y": pos["y"], "z": pos["z"] + b["z"]})
-                    except BridgeError:
-                        pass  # dig can fail for lots of legitimate reasons (out of reach, unbreakable, etc.)
-
-            print(f"step {step}: actions={actions}")
-            time.sleep(0.1)
-
-        client.do_action({"type": "stop"})
+                    print(
+                        f"step {step}: stage={task_manager.status()} pos=({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f}) "
+                        f"health={observation['health']} actions={actions}"
+                    )
+                step += 1
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("interrupted")
+        finally:
+            client.do_action({"type": "stop"})
 
 
 if __name__ == "__main__":

@@ -39,9 +39,9 @@ function nearbyEntities(bot) {
     if (distance > ENTITY_RADIUS) continue;
     entities.push({
       id: entity.id,
-      type: entity.type,
+      type: entity.type ?? "unknown",
       name: entity.name || entity.username || entity.displayName || "unknown",
-      kind: entity.kind,
+      kind: entity.kind ?? "unknown", // undefined would silently vanish from the JSON entirely, not become null
       position: { x: entity.position.x, y: entity.position.y, z: entity.position.z },
       velocity: { x: entity.velocity.x, y: entity.velocity.y, z: entity.velocity.z },
       distance,

@@ -12,16 +12,24 @@ Minecraft progression.
   hard backstop on top of bot-bridge's own per-action timeout, so a wedged
   bridge process can't hang an automated rollout loop forever (matters a
   lot once M5 is running many unattended training rollouts).
-- `loop.py` — implemented (M4): the real-time control loop (observation ->
-  encoder -> `SIM_TICKS_PER_ACTION` sim steps -> decoder -> action), still
-  on the synthetic stand-in graph. Validated live end-to-end against a real
-  server; along the way found and fixed a real concurrency bug (see
-  bot-bridge's README) where digging while moving could leave a request
-  permanently unanswered.
-
-Planned (M5/M6):
-
-- `task_manager.py` — subgoal stack / state machine for progression (wood ->
-  stone -> iron -> diamond -> nether -> stronghold -> Ender Dragon)
+- `loop.py` — implemented (M4, now on the real connectome): the real-time
+  control loop. Each step, `task_manager.decide()` gets first say; only
+  when it returns `None` (nothing specific to do) does control fall
+  through to the fly-brain's trained reflexes. `load_real_graph()` is
+  shared with `training/live_rollout.py` so live training scores the same
+  graph the live loop actually runs on.
+- `task_manager.py` — implemented (M6, first slice): explicitly
+  non-biological subgoal stack. Currently covers gather wood -> craft
+  planks -> craft + place a table -> craft basic wooden tools -> hand off
+  to open-ended fly-brain exploration, plus an always-on low-health flee
+  override. Deliberately scripted, precise, deterministic logic for things
+  a fly brain fundamentally can't do (crafting, navigating to a specific
+  known block) — the fly brain still does the open-ended
+  movement/exploration/threat-response in between. Later progression
+  stages (stone/iron/diamond tools, Nether travel, stronghold, the Ender
+  Dragon fight) follow the same stage-machine pattern, not implemented yet
+  — this is a first working slice, not the full game. Unit-tested against
+  fabricated observations in
+  [../tests/test_task_manager.py](../tests/test_task_manager.py).
 
 See [../../docs/architecture.md](../../docs/architecture.md).

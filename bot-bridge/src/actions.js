@@ -131,11 +131,22 @@ async function doCraft(bot, command, mcData) {
   if (!itemDef) {
     throw new Error(`unknown item '${item}'`);
   }
-  const recipes = bot.recipesFor(itemDef.id, null, count || 1, null);
+
+  // 3x3 recipes (most tools) need a placed crafting table within reach -
+  // without this, doCraft could only ever make 2x2 recipes (sticks,
+  // planks) regardless of what's actually placed nearby.
+  const tableId = mcData.blocksByName.crafting_table?.id;
+  const craftingTableBlock =
+    tableId != null ? bot.findBlock({ matching: tableId, maxDistance: 4 }) : null;
+
+  let recipes = bot.recipesFor(itemDef.id, null, count || 1, craftingTableBlock);
+  if (recipes.length === 0 && craftingTableBlock) {
+    recipes = bot.recipesFor(itemDef.id, null, count || 1, null); // fall back to tableless recipes
+  }
   if (recipes.length === 0) {
     throw new Error(`no available recipe for '${item}' (may need a crafting table nearby)`);
   }
-  await bot.craft(recipes[0], count || 1, null);
+  await bot.craft(recipes[0], count || 1, craftingTableBlock);
   return { ok: true };
 }
 
