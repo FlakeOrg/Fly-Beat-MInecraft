@@ -9,6 +9,7 @@ dependencies = [
     "scipy",
     "pandas",
     "pyarrow",
+    "requests",
     "websockets>=12",
 ]
 

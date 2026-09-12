@@ -48,6 +48,20 @@ class LIFParams:
     b_adapt: float = 0.5
     tau_adapt: float = 30.0
 
+    # Short-term synaptic depression: distinct from (and complementary to)
+    # spike-frequency adaptation above. Adaptation suppresses a neuron's own
+    # excitability after it fires; depression instead weakens a neuron's
+    # *outgoing* synapses after it fires, recovering with time constant
+    # `tau_depression`. This matters for networks with strong reverberating
+    # loops between populations (found necessary for the real hemibrain
+    # graph, much denser than the synthetic test graph - see
+    # connectome/README.md): per-neuron adaptation alone wasn't enough to
+    # stop those loops from settling into permanent self-sustained activity,
+    # since depression acts directly on the connections doing the
+    # reverberating rather than only on the neurons receiving it.
+    depression_frac: float = 0.0  # 0 = disabled (backwards compatible default)
+    tau_depression: float = 50.0
+
 
 class LIFNetwork:
     """A leaky-integrate-and-fire network over a fixed weighted graph."""
@@ -66,6 +80,7 @@ class LIFNetwork:
         self.refractory = np.zeros(self.n, dtype=np.int32)
         self.last_spikes = np.zeros(self.n, dtype=np.float64)
         self.adaptation = np.zeros(self.n, dtype=np.float64)
+        self.avail = np.ones(self.n, dtype=np.float64)
 
     def step(self, ext_current: np.ndarray) -> np.ndarray:
         """Advance the network by one tick given external injected current.
@@ -77,7 +92,7 @@ class LIFNetwork:
         if ext_current.shape != (self.n,):
             raise ValueError(f"ext_current must have shape ({self.n},), got {ext_current.shape}")
 
-        syn_current = self.weights @ self.last_spikes * p.syn_scale
+        syn_current = self.weights @ (self.last_spikes * self.avail) * p.syn_scale
         syn_current = np.asarray(syn_current).reshape(self.n)
 
         not_refractory = self.refractory <= 0
@@ -94,6 +109,9 @@ class LIFNetwork:
 
         self.adaptation += (p.dt / p.tau_adapt) * (-self.adaptation)
         self.adaptation[spikes] += p.b_adapt
+
+        self.avail += (p.dt / p.tau_depression) * (1.0 - self.avail)
+        self.avail[spikes] *= 1.0 - p.depression_frac
 
         self.last_spikes = spikes.astype(np.float64)
         return self.last_spikes

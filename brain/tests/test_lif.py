@@ -87,3 +87,40 @@ def test_rejects_wrong_shaped_current(tuned_network):
     net, n_neurons, _, _ = tuned_network
     with pytest.raises(ValueError):
         net.step(np.zeros(n_neurons + 1))
+
+
+def test_depression_disabled_by_default_keeps_avail_at_one(tuned_network):
+    net, n_neurons, input_idx, _ = tuned_network
+    ext = _drive_trace(50, n_neurons, input_idx, drive_until=50)
+    net.run(ext)
+    np.testing.assert_array_equal(net.avail, np.ones(n_neurons))
+
+
+def test_depression_depletes_on_spike_and_recovers():
+    weights, input_idx, _ = make_synthetic_graph(
+        n_neurons=200, p_connect=0.08, weight_scale=1.0, inhibitory_frac=0.2, inhibitory_strength=2.0, seed=0
+    )
+    params = LIFParams(syn_scale=4.0, b_adapt=0.4, tau_adapt=40.0, depression_frac=0.5, tau_depression=20.0)
+    net = LIFNetwork(weights, params)
+    ext = _drive_trace(60, 200, input_idx, drive_until=60)
+    net.run(ext)
+    driven_avail = net.avail[input_idx].mean()
+    assert driven_avail < 1.0, "spiking neurons should have depleted synaptic resources"
+
+    # let it recover with no further input
+    net.run(np.zeros((200, 200)))
+    assert net.avail[input_idx].mean() > driven_avail, "availability should recover once spiking stops"
+
+
+def test_depression_reduces_steady_state_firing():
+    weights, input_idx, output_idx = make_synthetic_graph(
+        n_neurons=200, p_connect=0.08, weight_scale=1.0, inhibitory_frac=0.2, inhibitory_strength=2.0, seed=0
+    )
+    ext = _drive_trace(300, 200, input_idx, drive_until=300, amplitude=2.0)
+
+    net_no_dep = LIFNetwork(weights, LIFParams(syn_scale=4.0, b_adapt=0.4, tau_adapt=40.0, depression_frac=0.0))
+    net_with_dep = LIFNetwork(weights, LIFParams(syn_scale=4.0, b_adapt=0.4, tau_adapt=40.0, depression_frac=0.6, tau_depression=20.0))
+
+    rate_no_dep = net_no_dep.run(ext)[100:, output_idx].mean()
+    rate_with_dep = net_with_dep.run(ext)[100:, output_idx].mean()
+    assert rate_with_dep < rate_no_dep, "depression should suppress steady-state firing relative to no depression"
