@@ -33,7 +33,7 @@ from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from sim.lif import LIFNetwork  # noqa: E402
 from training.train_interface import unflatten_params  # noqa: E402
 
-EPISODE_STEPS = 60
+EPISODE_STEPS = 150
 STEP_SLEEP_S = 0.1
 
 
@@ -145,4 +145,11 @@ def _run_episode_inner(
     survival_bonus = 0.0 if died else 1.0
     health_fraction = final_health / 20.0
     resources_gained = max(0, final_resources - start_resources)
-    return survival_bonus + health_fraction + 0.1 * max_distance + 0.5 * resources_gained
+    reward = survival_bonus + health_fraction + 0.1 * max_distance + 0.5 * resources_gained
+
+    print(
+        f"  episode [{bridge_url}]: reward={reward:.3f} "
+        f"(died={died}, health={final_health}/20, distance={max_distance:.1f}, "
+        f"resources_gained={resources_gained}, stage={task_manager.stage if task_manager else 'n/a'})"
+    )
+    return reward

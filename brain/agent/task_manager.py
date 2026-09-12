@@ -63,13 +63,6 @@ def _yaw_towards(dx: float, dz: float) -> float:
     return math.atan2(-dx, dz)
 
 
-def _nearest_log_block(observation: dict) -> dict | None:
-    logs = [b for b in observation["nearbyBlocks"] if b["name"] in LOG_TO_PLANKS]
-    if not logs:
-        return None
-    return min(logs, key=lambda b: b["x"] ** 2 + b["y"] ** 2 + b["z"] ** 2)
-
-
 def _nearest_hostile(observation: dict) -> dict | None:
     hostiles = [e for e in observation["nearbyEntities"] if e.get("kind") == "Hostile mobs"]
     if not hostiles:
@@ -82,6 +75,13 @@ class TaskManager:
     stage: str = "gather_wood"
     steps_in_stage: int = 0
     _crafted_tools: set = field(default_factory=set)
+    # Absolute (floored) position of the log block currently being pursued,
+    # or None. Without this, picking "nearest" fresh from each tick's
+    # bot-relative nearbyBlocks made the bot dither between two similarly-
+    # distanced trees: a step towards one shifts relative distances enough
+    # that the other becomes "nearest" next tick, so it never commits to
+    # either - a real live-run failure mode, not hypothetical.
+    _wood_target: tuple[int, int, int] | None = None
 
     def status(self) -> str:
         return f"{self.stage} (step {self.steps_in_stage})"
@@ -127,12 +127,37 @@ class TaskManager:
             {"type": "move", "forward": True, "sprint": True, "left": False, "right": False, "jump": False},
         ]
 
+    def _locate_wood_target(self, observation: dict) -> tuple[int, int, int] | None:
+        """Returns (dx, dy, dz) offset (bot-relative) of the log block to
+        pursue this tick, committing to the same absolute block across
+        calls until it's reached/dug or leaves view - rather than
+        recomputing "nearest" fresh every tick, which caused visible
+        dithering between two similarly-close trees."""
+        pos = observation["position"]
+        ox, oy, oz = math.floor(pos["x"]), math.floor(pos["y"]), math.floor(pos["z"])
+        logs = [b for b in observation["nearbyBlocks"] if b["name"] in LOG_TO_PLANKS]
+        if not logs:
+            self._wood_target = None
+            return None
+
+        if self._wood_target is not None:
+            tx, ty, tz = self._wood_target
+            rel_x, rel_y, rel_z = tx - ox, ty - oy, tz - oz
+            if any(b["x"] == rel_x and b["y"] == rel_y and b["z"] == rel_z for b in logs):
+                return rel_x, rel_y, rel_z
+            self._wood_target = None  # dug or out of view - pick a new one below
+
+        nearest = min(logs, key=lambda b: b["x"] ** 2 + b["y"] ** 2 + b["z"] ** 2)
+        self._wood_target = (ox + nearest["x"], oy + nearest["y"], oz + nearest["z"])
+        return nearest["x"], nearest["y"], nearest["z"]
+
     def _gather_wood(self, observation: dict) -> list[dict] | None:
         if _total_logs(observation) >= WOOD_TARGET:
             self._advance("craft_planks")
+            self._wood_target = None
             return None
 
-        target = _nearest_log_block(observation)
+        target = self._locate_wood_target(observation)
         if target is None:
             if self.steps_in_stage > MAX_STAGE_STEPS:
                 # nothing findable nearby after a long search - let the fly
@@ -140,7 +165,7 @@ class TaskManager:
                 self.steps_in_stage = 0
             return None  # let the fly brain explore until something's in range
 
-        dx, dy, dz = target["x"], target["y"], target["z"]
+        dx, dy, dz = target
         if abs(dx) <= 1 and abs(dz) <= 1 and abs(dy) <= 1:
             pos = observation["position"]
             return [
@@ -161,6 +186,7 @@ class TaskManager:
         log_name = next((n for n in LOG_TO_PLANKS if _inventory_count(observation, n) > 0), None)
         if log_name is None:
             self._advance("gather_wood")  # ran out somehow; go get more
+            self._wood_target = None
             return None
         return [{"type": "craft", "item": LOG_TO_PLANKS[log_name], "count": PLANKS_TARGET}]
 

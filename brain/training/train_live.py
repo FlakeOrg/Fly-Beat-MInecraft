@@ -10,7 +10,8 @@ means and multi_bridge.py for how the parallel bots are launched.
 Each real episode costs real, un-speed-up-able wall-clock Minecraft ticks.
 A first small run (3 bots, 5 generations, population 4) validated the
 mechanism end to end: fitness 2.413 -> 5.139 (see training/README.md).
-Current settings (5 bots, 200 generations, population 10) are a genuine
+Current settings (20 bots, 200 generations, population 10 -> 20 mirrored
+candidates per generation, one per bot with no queueing) are a genuine
 long unattended run, not something to babysit interactively - checkpoints
 every generation via `on_generation` (data/trained_interface_live.npz),
 so it's safe to leave running and safe to interrupt.
@@ -35,7 +36,7 @@ from training.live_rollout import run_episode  # noqa: E402
 from training.multi_bridge import launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
-N_PARALLEL_BOTS = 5
+N_PARALLEL_BOTS = 20
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUT_PATH = DATA_DIR / "trained_interface_live.npz"
 

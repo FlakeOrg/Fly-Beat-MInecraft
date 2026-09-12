@@ -141,6 +141,49 @@ def test_high_health_near_hostile_does_not_flee():
     assert actions is None  # falls through to normal gather_wood logic (no log nearby -> defer)
 
 
+def test_commits_to_one_tree_instead_of_dithering_between_two():
+    # Two logs at nearly equal distance (3 vs 3.16) - picking "nearest" fresh
+    # each tick without memory would flip back and forth as the bot's own
+    # movement shifts the relative distances, never committing to either.
+    tm = TaskManager()
+    obs = make_observation(
+        nearbyBlocks=[
+            {"x": 3, "y": 0, "z": 0, "name": "oak_log"},
+            {"x": 0, "y": 0, "z": 3, "name": "birch_log"},
+        ]
+    )
+    tm.decide(obs)
+    first_target = tm._wood_target
+    assert first_target is not None
+
+    # Simulate the bot having stepped one block closer to whichever tree it
+    # picked (position moves, log's absolute position doesn't - so its
+    # bot-relative offset shrinks) - the *other* tree may now be marginally
+    # nearer, but the task manager should still pursue the one it already
+    # committed to.
+    obs2 = make_observation(
+        position={"x": 1.0, "y": 64.0, "z": 0.0},
+        nearbyBlocks=[
+            {"x": 2, "y": 0, "z": 0, "name": "oak_log"},
+            {"x": -1, "y": 0, "z": 3, "name": "birch_log"},
+        ],
+    )
+    tm.decide(obs2)
+    assert tm._wood_target == first_target
+
+
+def test_picks_new_tree_once_committed_target_is_gone():
+    tm = TaskManager()
+    obs = make_observation(nearbyBlocks=[{"x": 1, "y": 0, "z": 0, "name": "oak_log"}])
+    tm.decide(obs)
+    assert tm._wood_target == (1, 64, 0)
+
+    # original log dug/out of view, a different one appears
+    obs2 = make_observation(nearbyBlocks=[{"x": 0, "y": 0, "z": 2, "name": "birch_log"}])
+    tm.decide(obs2)
+    assert tm._wood_target == (0, 64, 2)
+
+
 def test_low_health_far_from_hostile_does_not_flee():
     tm = TaskManager()
     obs = make_observation(

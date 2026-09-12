@@ -2,7 +2,7 @@
 // process. Kept structured (not pixels) - much easier to map onto a small
 // set of sensory channels than raw vision would be.
 
-const RADIUS_XZ = 4;
+const RADIUS_XZ = 8;
 const RADIUS_Y_DOWN = 2;
 const RADIUS_Y_UP = 3;
 const ENTITY_RADIUS = 16;
