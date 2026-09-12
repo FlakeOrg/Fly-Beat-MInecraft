@@ -1,6 +1,7 @@
 # Node
 node_modules/
 npm-debug.log*
+bot-bridge/*.log
 
 # Python
 __pycache__/
@@ -22,3 +23,7 @@ Thumbs.db
 # Secrets
 .env
 *.token
+
+# Local Minecraft test server + portable JDK (large binaries, machine-specific)
+.mc-server/
+.toolchain/

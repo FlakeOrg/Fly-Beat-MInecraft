@@ -7,7 +7,7 @@ dependencies = [
     "neuprint-python",
     "numpy",
     "scipy",
-    "websockets",
+    "websockets>=12",
 ]
 
 [project.optional-dependencies]

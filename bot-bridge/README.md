@@ -1,18 +1,31 @@
 # bot-bridge
 
 Node.js service that connects a [Mineflayer](https://github.com/PrismarineJS/mineflayer)
-bot to a local Minecraft server and exposes it over a small WebSocket JSON API
-so the Python `brain/` process never has to touch the Minecraft protocol
-directly.
+bot to a Minecraft server and exposes it over a WebSocket JSON API so the
+Python `brain/` process never has to touch the Minecraft protocol directly.
+Implemented (M1) and validated end-to-end against a local Paper server.
 
-Planned layout (M1):
+- `src/index.js` — connects the bot, runs the WebSocket server. Protocol:
+  client sends `{id, method, params}`, server replies `{id, result}` or
+  `{id, error}`; unsolicited `{type: "event", event: "spawn"|"death"|"kicked"|"end"}`
+  messages are broadcast for lifecycle changes.
+- `src/observation.js` — `buildObservation(bot)`: position, health/food,
+  nearby blocks (small radius around the bot) and entities, inventory.
+- `src/actions.js` — `performAction(bot, mcData, command)`: `move`, `stop`,
+  `look`, `lookAt`, `dig`, `place`, `attack`, `equip`, `craft`, `chat`.
 
-- `package.json` — deps: `mineflayer`, `ws`
-- `src/index.js` — connects the bot, runs the WebSocket server
-- `src/observation.js` — builds an observation JSON from bot state
-  (position, health, hunger, nearby blocks/entities, inventory)
-- `src/actions.js` — translates action commands (move, turn, jump, mine,
-  place, attack, craft) into Mineflayer calls
+## Run it
 
-Not yet implemented — see [../docs/architecture.md](../docs/architecture.md)
-and the M1 milestone.
+```
+npm install
+npm start
+```
+
+Env vars: `MC_HOST` (default `localhost`), `MC_PORT` (`25565`), `MC_USERNAME`
+(`FlyBrain`), `MC_VERSION` (auto-detect), `MC_AUTH` (`offline`),
+`BRIDGE_PORT` (`8081`). See [../scripts/start_server.md](../scripts/start_server.md)
+for setting up a local test server to point it at.
+
+Python side: [../brain/agent/bridge_client.py](../brain/agent/bridge_client.py).
+
+See [../docs/architecture.md](../docs/architecture.md).
