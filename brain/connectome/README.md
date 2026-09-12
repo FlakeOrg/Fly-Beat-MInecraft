@@ -55,17 +55,23 @@ a bug to be tuned away with 2-3 global scalars.
 
 Whether that's actually a problem depends on framing: tested whether
 *different* driven inputs produce *different* persistent states (not just
-"some elevated activity" vs. silence) - driving two disjoint 150-neuron
-subsets of the visual-PN pool gives output-pool firing-rate vectors with
-**0.84 correlation** to each other (vs. 1.0 for repeating the same input
-twice), so there is real, repeatable, input-specific structure in the
-result even though the network doesn't return to a zero baseline. That
-makes this closer to a **liquid-state-machine / reservoir-computing**
+"some elevated activity" vs. silence). Driving 15 different random
+150-neuron subsets of the visual-PN pool and comparing the resulting
+output-pool firing-rate vectors pairwise: off-diagonal correlation
+0.757 ± 0.094 (range 0.462-0.934, vs. 1.0 for repeating the same input
+twice) - a real spread, not everything collapsing onto one generic "on"
+state. The **participation ratio** (effective dimensionality) of those 15
+response vectors is **~5.3** (out of a max of 15) - meaningful,
+multi-dimensional, condition-specific structure survives the persistence,
+it isn't just a single "how active is everything" scalar.
+
+That makes this closer to a **liquid-state-machine / reservoir-computing**
 setup - a fixed, complex, recurrent substrate with rich (if persistent)
-dynamics, decoded by a trained readout - than a simple reflex arc, which
-may be a perfectly workable framing for M5's trained decoder rather than a
-blocker. Not yet validated with an actual trained decoder, though - this is
-the honest state of things, not a solved problem.
+dynamics, decoded by a trained readout - than a simple reflex arc. This is
+a genuinely encouraging sign for M5 (the decoder would have real,
+multi-dimensional signal to learn from), but it's still a proxy measure,
+not validation with an actual trained decoder doing anything useful yet -
+that's the honest state of things.
 
 Tests: [../tests/test_graph.py](../tests/test_graph.py) (fabricated data,
 still passes unchanged).
