@@ -20,9 +20,19 @@ class BridgeError(RuntimeError):
 
 
 class BridgeClient:
-    def __init__(self, url: str = "ws://localhost:8081", on_event: Callable[[dict], None] | None = None):
+    def __init__(
+        self,
+        url: str = "ws://localhost:8081",
+        on_event: Callable[[dict], None] | None = None,
+        timeout: float = 15.0,
+    ):
+        # A hard backstop on top of bot-bridge's own per-action timeout
+        # (see index.js's ACTION_TIMEOUT_MS): if the bridge process itself
+        # is dead or wedged, a training loop (M5) that calls this in a tight
+        # rollout loop must not hang forever waiting on one response.
         self.url = url
         self.on_event = on_event
+        self.timeout = timeout
         self._ws: ClientConnection | None = None
         self._id_counter = itertools.count(1)
 
@@ -49,7 +59,10 @@ class BridgeClient:
         self._ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
 
         while True:
-            raw = self._ws.recv()
+            try:
+                raw = self._ws.recv(timeout=self.timeout)
+            except TimeoutError as exc:
+                raise BridgeError(f"no response to '{method}' within {self.timeout}s") from exc
             message = json.loads(raw)
             if message.get("type") == "event":
                 if self.on_event is not None:

@@ -56,6 +56,8 @@ async function doLookAt(bot, command) {
   return { ok: true };
 }
 
+const DIG_TIMEOUT_MS = 8000;
+
 async function doDig(bot, command) {
   const pos = requirePosition(command);
   const block = bot.blockAt(pos);
@@ -65,7 +67,24 @@ async function doDig(bot, command) {
   if (!bot.canDigBlock(block)) {
     throw new Error(`cannot dig block ${block.name} at ${pos}`);
   }
-  await bot.dig(block);
+
+  // bot.dig()'s promise can fail to settle if the target goes out of reach
+  // mid-dig (e.g. movement controls are active at the same time) - without
+  // this, a single stuck dig hangs the WebSocket connection forever. On
+  // timeout, explicitly cancel the in-progress dig rather than just giving
+  // up on waiting for it.
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      bot.stopDigging();
+      reject(new Error(`dig timed out after ${DIG_TIMEOUT_MS}ms (target may have moved out of reach)`));
+    }, DIG_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([bot.dig(block), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
   return { ok: true, block: block.name };
 }
 

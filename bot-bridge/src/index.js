@@ -43,6 +43,15 @@ bot.on("kicked", (reason) => broadcastEvent("kicked", { reason }));
 bot.on("end", (reason) => broadcastEvent("end", { reason }));
 bot.on("error", (err) => console.error("[bot-bridge] bot error:", err));
 
+const ACTION_TIMEOUT_MS = 10000;
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 const wss = new WebSocketServer({ port: BRIDGE_PORT });
 console.log(`[bot-bridge] WebSocket server listening on ws://localhost:${BRIDGE_PORT}`);
 
@@ -75,7 +84,15 @@ wss.on("connection", (ws) => {
         result = buildObservation(bot);
       } else if (method === "doAction") {
         if (!bot.entity) throw new Error("bot has not spawned yet");
-        result = await performAction(bot, mcData, params);
+        // Blanket safety net so a stuck/never-settling action (mineflayer
+        // promises don't always resolve/reject cleanly, e.g. a dig whose
+        // target moves out of reach - see actions.js's own dig-specific
+        // timeout) can never hang this connection forever.
+        result = await withTimeout(
+          performAction(bot, mcData, params),
+          ACTION_TIMEOUT_MS,
+          `action '${params?.type}' timed out after ${ACTION_TIMEOUT_MS}ms`
+        );
       } else if (method === "ping") {
         result = { pong: true };
       } else {

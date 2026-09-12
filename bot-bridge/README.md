@@ -13,6 +13,11 @@ Implemented (M1) and validated end-to-end against a local Paper server.
   nearby blocks (small radius around the bot) and entities, inventory.
 - `src/actions.js` — `performAction(bot, mcData, command)`: `move`, `stop`,
   `look`, `lookAt`, `dig`, `place`, `attack`, `equip`, `craft`, `chat`.
+  `dig` has its own timeout that cancels the in-progress dig (`bot.stopDigging()`)
+  if the target goes out of reach mid-action — discovered live in M4 when
+  digging while moving left a request permanently unanswered. `index.js`
+  also wraps every `doAction` call in a blanket timeout as a safety net for
+  any other action type that might not settle cleanly.
 
 ## Run it
 
