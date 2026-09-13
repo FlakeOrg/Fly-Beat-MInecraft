@@ -45,3 +45,20 @@ def test_existing_movement_is_preserved():
     command = movement_command_from_actions(actions, make_observation())
     assert command["left"] is True
     assert command["forward"] is False
+
+
+def test_a_firing_task_verb_does_not_suppress_exploration():
+    """Found live: task verbs (craft/place/smelt) fire almost every tick once
+    added to the action space. Since they used to be absent from `actions`
+    entirely, the old `any(actions.values())` check started reading as "the
+    network is doing something" purely because a craft attempt crossed
+    threshold - even with every movement key false - so the bot stood
+    completely still, firing craft attempts nonstop, never walking anywhere
+    to find material for them."""
+    actions = {
+        "forward": False, "left": False, "right": False, "jump": False,
+        "attack": False, "mine_ahead": False,
+        "craft_table": True,  # a task verb firing must not count as "moving"
+    }
+    command = movement_command_from_actions(actions, make_observation())
+    assert command["forward"] is True
