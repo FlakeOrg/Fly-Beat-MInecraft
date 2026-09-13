@@ -126,7 +126,7 @@ def _run_episode_inner(
         max_distance = 0.0
         died = False
         final_health = start_obs["health"]
-        task_attempts: dict[str, int] = {}
+        task_attempts: dict[str, list[int]] = {}  # verb -> [attempts, successes]
 
         for _ in range(episode_steps):
             try:
@@ -159,11 +159,19 @@ def _run_episode_inner(
 
                 # Whichever task verb the network asked for most strongly,
                 # if any. Nothing here decides what it "should" be doing -
-                # see agent/self_actions.py.
+                # see agent/self_actions.py. Counted regardless of whether
+                # the attempt actually succeeds: a failed craft (missing
+                # materials) is completely normal early on, and only
+                # counting successes made every attempt invisible in the
+                # log - it looked like the network never even tried,
+                # when live data (see training/README.md) shows it reliably
+                # does; it just usually can't afford the recipe yet.
                 task_action = decoder.decode_task_action(spike_window)
                 if task_action is not None:
-                    if perform(task_action, observation, client):
-                        task_attempts[task_action] = task_attempts.get(task_action, 0) + 1
+                    succeeded = perform(task_action, observation, client)
+                    counts = task_attempts.setdefault(task_action, [0, 0])
+                    counts[0] += 1
+                    counts[1] += 1 if succeeded else 0
 
                 if actions.get("mine_ahead"):
                     _mine_ahead(observation, client)
@@ -201,7 +209,7 @@ def _run_episode_inner(
         - (3.0 if died else 0.0)
     )
 
-    attempted = ",".join(f"{k}x{v}" for k, v in sorted(task_attempts.items())) or "none"
+    attempted = ",".join(f"{k}x{tries}({ok}ok)" for k, (tries, ok) in sorted(task_attempts.items())) or "none"
     print(
         f"  episode [{bridge_url}]: reward={reward:.3f} "
         f"(died={died}, health={final_health}/20, distance={max_distance:.1f}, "
