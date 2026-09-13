@@ -17,6 +17,7 @@ training run produced.
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
+from agent.goals import END_GOAL, next_training_step  # noqa: E402
+from agent.movement import movement_command_from_actions  # noqa: E402
+from agent.self_actions import perform  # noqa: E402
 from agent.task_manager import TaskManager  # noqa: E402
 from connectome.graph import build_adjacency, identify_pools  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
@@ -71,13 +75,23 @@ def build_brain() -> tuple[LIFNetwork, SensoryEncoder, MotorDecoder]:
     weights, input_idx, output_idx = load_real_graph()
     net = LIFNetwork(weights, LIF_PARAMS)
 
-    if TRAINED_WEIGHTS_PATH.exists():
-        saved = np.load(TRAINED_WEIGHTS_PATH)
-        assert np.array_equal(saved["input_idx"], input_idx), "trained weights don't match the current input pool"
-        assert np.array_equal(saved["output_idx"], output_idx), "trained weights don't match the current output pool"
+    probe_encoder, probe_decoder = SensoryEncoder(input_idx), MotorDecoder(output_idx)
+    saved = np.load(TRAINED_WEIGHTS_PATH) if TRAINED_WEIGHTS_PATH.exists() else None
+    usable = saved is not None and (
+        np.array_equal(saved["input_idx"], input_idx)
+        and np.array_equal(saved["output_idx"], output_idx)
+        # Feature and action counts change as the bot gains new senses and
+        # verbs; an older checkpoint is then simply the wrong shape.
+        and saved["encoder_weights"].shape == probe_encoder.weights.shape
+        and saved["decoder_weights"].shape == probe_decoder.weights.shape
+    )
+    if usable:
         encoder = SensoryEncoder(input_idx, weights=saved["encoder_weights"])
         decoder = MotorDecoder(output_idx, weights=saved["decoder_weights"])
         print(f"loaded trained weights from {TRAINED_WEIGHTS_PATH}")
+    elif saved is not None:
+        encoder, decoder = probe_encoder, probe_decoder
+        print(f"ignoring {TRAINED_WEIGHTS_PATH}: does not match the current interface - using fresh init")
     else:
         encoder = SensoryEncoder(input_idx)
         decoder = MotorDecoder(output_idx)
@@ -86,7 +100,12 @@ def build_brain() -> tuple[LIFNetwork, SensoryEncoder, MotorDecoder]:
     return net, encoder, decoder
 
 
-def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", status_every: int = 10) -> None:
+def run(
+    n_steps: int | None = None,
+    bridge_url: str = "ws://localhost:8081",
+    status_every: int = 10,
+    use_task_manager: bool = True,
+) -> None:
     """Runs the control loop. `n_steps=None` runs until interrupted (Ctrl+C).
 
     Each step, the task manager gets first say (task_manager.py): if it has
@@ -97,8 +116,10 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
     fallback of convenience.
     """
     net, encoder, decoder = build_brain()
-    task_manager = TaskManager()
+    task_manager = TaskManager() if use_task_manager else None
+    mode = "assisted" if task_manager is not None else "self"
     print(f"connectome: {net.n} neurons, {len(encoder.input_idx)} input, {len(decoder.output_idx)} output")
+    print(f"mode={mode} goal={END_GOAL}")
 
     step = 0
     with BridgeClient(bridge_url) as client:
@@ -114,14 +135,9 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
                     time.sleep(2.0)
                     continue
 
-                scripted_actions = task_manager.decide(observation)
-                if scripted_actions is not None:
-                    actions = {"scripted": task_manager.status()}
-                    for command in scripted_actions:
-                        try:
-                            client.do_action(command)
-                        except BridgeError:
-                            pass  # e.g. a dig/craft that's no longer valid this tick; try again next step
+                handled = task_manager.step(observation, client) if task_manager is not None else False
+                if handled:
+                    actions = {"scripted": task_manager.status}
                 else:
                     ext_current = encoder.encode(observation, net.n)
 
@@ -130,7 +146,9 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
                         spike_window[tick] = net.step(ext_current)
 
                     actions = decoder.decode(spike_window)
-                    move_command = {"type": "move", **{k: actions.get(k, False) for k in ("forward", "left", "right", "jump")}}
+                    move_command = movement_command_from_actions(actions, observation, step)
+                    if not any(actions.values()):
+                        actions = {**actions, "explore": True}
                     try:
                         client.do_action(move_command)
                     except BridgeError:
@@ -160,10 +178,19 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
                             except BridgeError:
                                 pass  # dig can fail for lots of legitimate reasons (out of reach, unbreakable, etc.)
 
+                    # Whichever craft/place/smelt verb the network asked for
+                    # most strongly, if any. Nothing here decides what it
+                    # ought to be doing - see agent/self_actions.py.
+                    task_action = decoder.decode_task_action(spike_window)
+                    if task_action is not None:
+                        performed = perform(task_action, observation, client)
+                        actions = {**actions, "task": f"{task_action}{'' if performed else ' (failed)'}"}
+
                 if step % status_every == 0:
                     pos = observation["position"]
+                    stage = task_manager.status if task_manager is not None else f"self: next={next_training_step(observation).label}"
                     print(
-                        f"step {step}: stage={task_manager.status()} pos=({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f}) "
+                        f"step {step}: stage={stage} pos=({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f}) "
                         f"health={observation['health']} actions={actions}"
                     )
                 step += 1
@@ -175,4 +202,14 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Run the fly-brain Minecraft control loop.")
+    parser.add_argument("--bridge-url", default="ws://localhost:8081")
+    parser.add_argument("--steps", type=int, default=None, help="number of control steps to run; default runs forever")
+    parser.add_argument("--status-every", type=int, default=10)
+    parser.add_argument(
+        "--self",
+        action="store_true",
+        help="turn off scripted TaskManager help; the bot only gets observations, actions, and learned weights",
+    )
+    args = parser.parse_args()
+    run(args.steps, args.bridge_url, args.status_every, use_task_manager=not args.self)

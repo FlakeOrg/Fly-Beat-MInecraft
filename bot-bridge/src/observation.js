@@ -60,12 +60,26 @@ function inventory(bot) {
   }));
 }
 
+function blockNameAt(bot, dx, dy, dz) {
+  const block = bot.blockAt(bot.entity.position.offset(dx, dy, dz));
+  return block ? block.name : "unknown";
+}
+
 export function buildObservation(bot) {
   if (!bot.entity) {
     throw new Error("bot has not spawned yet");
   }
   const pos = bot.entity.position;
+  const headBlock = blockNameAt(bot, 0, 1, 0);
   return {
+    // Progression//survival context the scripted task manager needs but the
+    // small sensory nearbyBlocks window can't answer: how deep we are, and
+    // whether we're currently drowning or standing in lava. Drowning was the
+    // most common cause of death in live runs before this existed.
+    inWater: headBlock === "water" || blockNameAt(bot, 0, 0, 0) === "water",
+    inLava: headBlock === "lava" || blockNameAt(bot, 0, 0, 0) === "lava",
+    oxygen: bot.oxygenLevel ?? null,
+    blockAtFeet: blockNameAt(bot, 0, -1, 0),
     position: { x: pos.x, y: pos.y, z: pos.z },
     yaw: bot.entity.yaw,
     pitch: bot.entity.pitch,

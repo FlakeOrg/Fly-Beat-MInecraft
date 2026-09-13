@@ -12,8 +12,11 @@
 import mineflayer from "mineflayer";
 import minecraftData from "minecraft-data";
 import { WebSocketServer } from "ws";
+import pathfinderPkg from "mineflayer-pathfinder";
 import { buildObservation } from "./observation.js";
-import { performAction } from "./actions.js";
+import { performAction, ACTION_TIMEOUTS_MS } from "./actions.js";
+
+const { pathfinder } = pathfinderPkg;
 
 const MC_HOST = process.env.MC_HOST || "localhost";
 const MC_PORT = Number(process.env.MC_PORT || 25565);
@@ -44,6 +47,8 @@ function connectBot() {
     auth: MC_AUTH,
   });
 
+  bot.loadPlugin(pathfinder);
+
   bot.once("spawn", () => {
     mcData = minecraftData(bot.version);
     connected = true;
@@ -51,7 +56,13 @@ function connectBot() {
     broadcastEvent("spawn", {});
   });
 
-  bot.on("death", () => broadcastEvent("death", {}));
+  bot.on("death", () => {
+    // A death leaves any in-flight pathfinder goal pointing at wherever the
+    // bot used to be, which it then immediately tries to walk back to -
+    // straight into whatever killed it. Clear it on respawn instead.
+    if (bot.pathfinder) bot.pathfinder.setGoal(null);
+    broadcastEvent("death", {});
+  });
   bot.on("kicked", (reason) => {
     console.log(`[bot-bridge] kicked: ${reason}`);
     broadcastEvent("kicked", { reason });
@@ -112,11 +123,14 @@ wss.on("connection", (ws) => {
         // Blanket safety net so a stuck/never-settling action (mineflayer
         // promises don't always resolve/reject cleanly, e.g. a dig whose
         // target moves out of reach - see actions.js's own dig-specific
-        // timeout) can never hang this connection forever.
+        // timeout) can never hang this connection forever. Navigation and
+        // smelting legitimately take far longer than the default, so those
+        // get their own budgets rather than being cut off mid-way.
+        const budget = ACTION_TIMEOUTS_MS[params?.type] ?? ACTION_TIMEOUT_MS;
         result = await withTimeout(
           performAction(bot, mcData, params),
-          ACTION_TIMEOUT_MS,
-          `action '${params?.type}' timed out after ${ACTION_TIMEOUT_MS}ms`
+          budget,
+          `action '${params?.type}' timed out after ${budget}ms`
         );
       } else if (method === "ping") {
         result = { pong: true };

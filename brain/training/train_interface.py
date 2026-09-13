@@ -181,7 +181,14 @@ def evaluate_situations(
         for t in range(sim_ticks):
             spike_window[t] = net.step(ext_current)
         predicted = decoder.decode(spike_window)
+        # The situations below only specify the movement/physical actions.
+        # Task verbs (craft/place/smelt) have no meaningful "correct" answer
+        # in a fabricated situation with no world behind it, so they're not
+        # scored here - this proxy task exists to validate the ES mechanism,
+        # not the progression ladder (that's live_rollout.py's job).
         for action in ACTIONS:
+            if action not in target:
+                continue
             total += 1
             if predicted[action] == target[action]:
                 correct += 1

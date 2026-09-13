@@ -3,6 +3,9 @@ node_modules/
 npm-debug.log*
 bot-bridge/*.log
 
+# Runtime logs from local bot/training processes
+logs/
+
 # Python
 __pycache__/
 *.pyc

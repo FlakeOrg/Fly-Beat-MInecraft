@@ -19,6 +19,21 @@ class BridgeError(RuntimeError):
     """Raised when bot-bridge returns an {error} response."""
 
 
+# Navigation, mining-with-travel and smelting genuinely take far longer than
+# a normal action (a smelt is ~10s per item by game rules; a long path plus
+# a dig can run past a minute). These mirror bot-bridge's own per-action
+# budgets (actions.js ACTION_TIMEOUTS_MS) with headroom - without them the
+# client gives up and reports failure while the bridge is still happily
+# working, which reads as a phantom error and wastes the whole rollout.
+SLOW_ACTION_TIMEOUTS_S = {
+    "goto": 60.0,
+    "gotoY": 60.0,
+    "mineBlock": 130.0,
+    "dig": 30.0,
+    "smelt": 150.0,
+}
+
+
 class BridgeClient:
     def __init__(
         self,
@@ -51,18 +66,19 @@ class BridgeClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _call(self, method: str, params: dict | None = None) -> Any:
+    def _call(self, method: str, params: dict | None = None, timeout: float | None = None) -> Any:
         if self._ws is None:
             raise RuntimeError("not connected - call connect() or use as a context manager")
 
+        wait_s = self.timeout if timeout is None else timeout
         request_id = next(self._id_counter)
         self._ws.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
 
         while True:
             try:
-                raw = self._ws.recv(timeout=self.timeout)
+                raw = self._ws.recv(timeout=wait_s)
             except TimeoutError as exc:
-                raise BridgeError(f"no response to '{method}' within {self.timeout}s") from exc
+                raise BridgeError(f"no response to '{method}' within {wait_s}s") from exc
             message = json.loads(raw)
             if message.get("type") == "event":
                 if self.on_event is not None:
@@ -77,7 +93,7 @@ class BridgeClient:
         return self._call("getObservation")
 
     def do_action(self, command: dict) -> dict:
-        return self._call("doAction", command)
+        return self._call("doAction", command, timeout=SLOW_ACTION_TIMEOUTS_S.get(command.get("type")))
 
     def ping(self) -> dict:
         return self._call("ping")

@@ -19,6 +19,7 @@ so it's safe to leave running and safe to interrupt.
 
 from __future__ import annotations
 
+import argparse
 import queue
 import sys
 import time
@@ -36,9 +37,10 @@ from training.live_rollout import run_episode  # noqa: E402
 from training.multi_bridge import assign_fly_skins, launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
-N_PARALLEL_BOTS = 20
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUT_PATH = DATA_DIR / "trained_interface_live.npz"
+PROXY_WEIGHTS_PATH = DATA_DIR / "trained_interface.npz"
+USE_TASK_MANAGER = False
 
 
 def save_weights(theta: np.ndarray, input_idx: np.ndarray, output_idx: np.ndarray, path: Path = OUT_PATH) -> None:
@@ -54,19 +56,63 @@ def save_weights(theta: np.ndarray, input_idx: np.ndarray, output_idx: np.ndarra
     )
 
 
-def main() -> None:
-    weights, input_idx, output_idx = load_real_graph()
-    seed_encoder = SensoryEncoder(input_idx, seed=0)
-    seed_decoder = MotorDecoder(output_idx, seed=0)
-    theta0 = flatten_params(seed_encoder, seed_decoder)
+def load_initial_theta(input_idx: np.ndarray, output_idx: np.ndarray, source: str) -> np.ndarray:
+    encoder = SensoryEncoder(input_idx, seed=0)
+    decoder = MotorDecoder(output_idx, seed=0)
 
-    print(f"launching {N_PARALLEL_BOTS} parallel bot-bridge instances...")
-    bridges = launch_bridges(N_PARALLEL_BOTS)
+    paths = {
+        "live": OUT_PATH,
+        "proxy": PROXY_WEIGHTS_PATH,
+    }
+    path = paths.get(source)
+    if path is not None and path.exists():
+        saved = np.load(path)
+        pools_match = np.array_equal(saved["input_idx"], input_idx) and np.array_equal(saved["output_idx"], output_idx)
+        # The saved weights also have to match the *current* feature and
+        # action counts. Both changed when the bot gained inventory senses
+        # and craft verbs, so older checkpoints are the wrong shape - load
+        # them blindly and training dies on a matmul instead of starting.
+        shapes_match = (
+            saved["encoder_weights"].shape == encoder.weights.shape
+            and saved["decoder_weights"].shape == decoder.weights.shape
+        )
+        if pools_match and shapes_match:
+            encoder.weights = saved["encoder_weights"]
+            decoder.weights = saved["decoder_weights"]
+            print(f"starting from {source} weights: {path}")
+            return flatten_params(encoder, decoder)
+        reason = "neuron pools" if not pools_match else "feature/action layout"
+        print(f"ignoring {path}: {reason} does not match current interface - starting fresh")
+
+    if source == "live":
+        return load_initial_theta(input_idx, output_idx, "proxy")
+
+    print("starting from default seeded interface weights")
+    return flatten_params(encoder, decoder)
+
+
+def main(
+    n_parallel_bots: int = 20,
+    generations: int = 200,
+    population_size: int = 10,
+    episode_steps: int = 150,
+    init: str = "live",
+    assign_skins: bool = True,
+) -> None:
+    weights, input_idx, output_idx = load_real_graph()
+    theta0 = load_initial_theta(input_idx, output_idx, init)
+
+    print(
+        f"launching {n_parallel_bots} self-training bot-bridge instances "
+        f"(generations={generations}, population_size={population_size}, episode_steps={episode_steps})..."
+    )
+    bridges = launch_bridges(n_parallel_bots)
     try:
         wait_until_all_spawned(bridges)
         print("all bridges spawned:", [b.username for b in bridges])
         time.sleep(2.0)  # let each bot fully settle into the world before scoring starts
-        assign_fly_skins(bridges)
+        if assign_skins:
+            assign_fly_skins(bridges)
 
         # One encoder/decoder pair per worker slot so concurrent rollouts
         # (each writing its assigned theta into them via run_episode's
@@ -98,7 +144,13 @@ def main() -> None:
                     except queue.Empty:
                         return
                     results[i] = run_episode(
-                        theta, worker_encoders[worker_idx], worker_decoders[worker_idx], weights, bridges[worker_idx].url
+                        theta,
+                        worker_encoders[worker_idx],
+                        worker_decoders[worker_idx],
+                        weights,
+                        bridges[worker_idx].url,
+                        use_task_manager=USE_TASK_MANAGER,
+                        episode_steps=episode_steps,
                     )
 
             with ThreadPoolExecutor(max_workers=len(bridges)) as pool:
@@ -118,7 +170,7 @@ def main() -> None:
         result = run_es(
             theta0,
             fitness_fn=None,
-            config=ESConfig(generations=200, population_size=10, sigma=0.5, lr=0.3, seed=0),
+            config=ESConfig(generations=generations, population_size=population_size, sigma=0.5, lr=0.3, seed=0),
             batch_fitness_fn=batch_fitness_fn,
             on_generation=checkpoint,
         )
@@ -134,4 +186,19 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train the fly-brain interface against live Minecraft rollouts.")
+    parser.add_argument("--bots", type=int, default=20, help="number of parallel Mineflayer bots to launch")
+    parser.add_argument("--generations", type=int, default=200)
+    parser.add_argument("--population-size", type=int, default=10, help="mirrored ES pairs; each generation evaluates 2x this many policies")
+    parser.add_argument("--episode-steps", type=int, default=150)
+    parser.add_argument("--init", choices=["live", "proxy", "default"], default="live")
+    parser.add_argument("--no-skins", action="store_true", help="skip cosmetic skin assignment")
+    args = parser.parse_args()
+    main(
+        n_parallel_bots=args.bots,
+        generations=args.generations,
+        population_size=args.population_size,
+        episode_steps=args.episode_steps,
+        init=args.init,
+        assign_skins=not args.no_skins,
+    )
