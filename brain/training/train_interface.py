@@ -89,8 +89,21 @@ def run_es(
 
     rng = np.random.default_rng(config.seed)
     theta = theta0.copy()
-    best_theta, best_fitness = theta.copy(), evaluate_many([theta])[0]
-    history = [best_fitness]
+
+    if batch_fitness_fn is not None:
+        # A solo baseline call would use exactly 1 of N parallel workers -
+        # harmless for the fast in-process proxy task below, but a real
+        # live rollout can now take minutes (real dig/craft/goto round
+        # trips), during which N-1 bots would sit completely idle waiting
+        # for this one call to finish before generation 0 even starts.
+        # Found live: reported as "all bots are still besides 1." Gen 0's
+        # own candidates (mirrored noise around theta0) establish a real
+        # baseline anyway, using full parallelism from the first round.
+        best_theta, best_fitness = theta.copy(), -np.inf
+        history: list[float] = []
+    else:
+        best_theta, best_fitness = theta.copy(), evaluate_many([theta])[0]
+        history = [best_fitness]
 
     for gen in range(config.generations):
         noise = rng.standard_normal((config.population_size, theta.size))

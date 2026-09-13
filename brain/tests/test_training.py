@@ -19,6 +19,28 @@ from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
 
+def test_batch_mode_never_evaluates_a_lone_candidate():
+    """Found live: a solo baseline call before generation 0 used exactly 1 of
+    N parallel bridges to evaluate theta0 alone, and with slow real-Minecraft
+    episodes that left N-1 bots idle for the whole call - reported as "all
+    bots are still besides 1." Every batch_fitness_fn call must request more
+    than one candidate at once, so all workers always have something to do
+    from the very first round."""
+    call_sizes = []
+
+    def batch_fitness_fn(thetas):
+        call_sizes.append(len(thetas))
+        return [float(np.sum(t)) for t in thetas]
+
+    run_es(
+        np.zeros(4),
+        fitness_fn=None,
+        config=ESConfig(generations=2, population_size=3, sigma=0.1, lr=0.1, seed=0),
+        batch_fitness_fn=batch_fitness_fn,
+    )
+    assert all(size > 1 for size in call_sizes)
+
+
 def test_es_improves_on_random_init_for_a_simple_target():
     rng = np.random.default_rng(0)
     target = rng.uniform(-1, 1, size=20)
