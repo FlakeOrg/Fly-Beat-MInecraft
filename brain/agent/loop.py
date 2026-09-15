@@ -89,12 +89,11 @@ def build_brain() -> tuple[LIFNetwork, SensoryEncoder, MotorDecoder]:
 def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", status_every: int = 10) -> None:
     """Runs the control loop. `n_steps=None` runs until interrupted (Ctrl+C).
 
-    Each step, the task manager gets first say (task_manager.py): if it has
-    a specific scripted subgoal action (walk to this log and mine it, craft
-    this item, flee that threat), that's what runs. Only when it has
-    nothing specific to do does control fall through to the fly-brain's
-    trained reflexes - that's the intended division of labor, not a
-    fallback of convenience.
+    Each step, the task manager gets first say (task_manager.py): it may
+    issue a short survival override for imminent danger, but it never
+    imposes a scripted objective or game plan. When there is no urgent
+    danger, control falls through to the fly-brain and the reward-driven
+    policy.
     """
     net, encoder, decoder = build_brain()
     task_manager = TaskManager()
@@ -163,7 +162,7 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
                 if step % status_every == 0:
                     pos = observation["position"]
                     print(
-                        f"step {step}: stage={task_manager.status()} pos=({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f}) "
+                        f"step {step}: mode={task_manager.status()} pos=({pos['x']:.1f},{pos['y']:.1f},{pos['z']:.1f}) "
                         f"health={observation['health']} actions={actions}"
                     )
                 step += 1

@@ -150,6 +150,6 @@ def _run_episode_inner(
     print(
         f"  episode [{bridge_url}]: reward={reward:.3f} "
         f"(died={died}, health={final_health}/20, distance={max_distance:.1f}, "
-        f"resources_gained={resources_gained}, stage={task_manager.stage if task_manager else 'n/a'})"
+        f"resources_gained={resources_gained}, mode={task_manager.status() if task_manager else 'n/a'})"
     )
     return reward
