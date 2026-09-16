@@ -30,7 +30,16 @@ SLOW_ACTION_TIMEOUTS_S = {
     "gotoY": 60.0,
     "mineBlock": 130.0,
     "dig": 30.0,
-    "smelt": 150.0,
+    # Mirrors bot-bridge's own outer cap (actions.js ACTION_TIMEOUTS_MS.smelt
+    # = SMELT_TIMEOUT_MS + 20s = 65s) with headroom. Was 150s to match a
+    # since-removed 120s inner poll loop that had no early-exit condition -
+    # a smelt that reached the furnace but never actually progressed (bad
+    # fuel/input match, a furnace another bot already had open, etc.) burned
+    # the whole timeout doing nothing, freezing that bot in place for up to
+    # two real minutes. The inner loop now scales to the requested item
+    # count instead of always waiting the max, so this only needs to be a
+    # backstop, not the primary bound.
+    "smelt": 70.0,
 }
 
 

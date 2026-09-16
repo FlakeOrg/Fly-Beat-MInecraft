@@ -13,10 +13,12 @@ import mineflayer from "mineflayer";
 import minecraftData from "minecraft-data";
 import { WebSocketServer } from "ws";
 import pathfinderPkg from "mineflayer-pathfinder";
+import prismarineViewerPkg from "prismarine-viewer";
 import { buildObservation } from "./observation.js";
 import { performAction, ACTION_TIMEOUTS_MS } from "./actions.js";
 
 const { pathfinder } = pathfinderPkg;
+const { mineflayer: mineflayerViewer } = prismarineViewerPkg;
 
 const MC_HOST = process.env.MC_HOST || "localhost";
 const MC_PORT = Number(process.env.MC_PORT || 25565);
@@ -24,6 +26,12 @@ const MC_USERNAME = process.env.MC_USERNAME || "FlyBrain";
 const MC_VERSION = process.env.MC_VERSION || false; // false = auto-detect
 const MC_AUTH = process.env.MC_AUTH || "offline";
 const BRIDGE_PORT = Number(process.env.BRIDGE_PORT || 8081);
+// Opt-in: unset by default so a plain bot-bridge run (e.g. a single manual
+// test bot) never pays for a 3D viewer it didn't ask for. The training
+// dashboard (dashboard/server.py) sets this per bot when it wants a live
+// spectate view.
+const VIEWER_PORT = process.env.VIEWER_PORT ? Number(process.env.VIEWER_PORT) : null;
+let viewerStarted = false;
 
 const RECONNECT_DELAY_MS = 3000;
 
@@ -54,6 +62,20 @@ function connectBot() {
     connected = true;
     console.log(`[bot-bridge] spawned as ${MC_USERNAME} on ${MC_HOST}:${MC_PORT} (mc ${bot.version})`);
     broadcastEvent("spawn", {});
+
+    // Only ever bound once per process, not once per reconnect: the
+    // viewer's own HTTP server can't rebind the same port a second time,
+    // and reconnects are rare mid-episode - a stale view until the next
+    // full restart is an acceptable tradeoff for not crashing on rebind.
+    if (VIEWER_PORT && !viewerStarted) {
+      viewerStarted = true;
+      try {
+        mineflayerViewer(bot, { port: VIEWER_PORT, firstPerson: false });
+        console.log(`[bot-bridge] viewer listening on http://localhost:${VIEWER_PORT}`);
+      } catch (err) {
+        console.error("[bot-bridge] viewer failed to start:", err);
+      }
+    }
   });
 
   bot.on("death", () => {

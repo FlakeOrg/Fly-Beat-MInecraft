@@ -29,4 +29,5 @@ Thumbs.db
 
 # Local Minecraft test server + portable JDK (large binaries, machine-specific)
 .mc-server/
+.mc-server-*/
 .toolchain/

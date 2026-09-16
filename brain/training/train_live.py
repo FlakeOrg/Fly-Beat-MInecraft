@@ -34,7 +34,14 @@ from agent.loop import load_real_graph  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
 from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from training.live_rollout import run_episode  # noqa: E402
-from training.multi_bridge import assign_fly_skins, launch_bridges, stop_all, wait_until_all_spawned  # noqa: E402
+from training.multi_bridge import (  # noqa: E402
+    Shard,
+    assign_fly_skins,
+    launch_bridges,
+    launch_shards,
+    stop_all,
+    wait_until_all_spawned,
+)
 from training.train_interface import ESConfig, flatten_params, run_es, unflatten_params  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -98,15 +105,38 @@ def main(
     episode_steps: int = 150,
     init: str = "live",
     assign_skins: bool = True,
+    enable_viewers: bool = False,
+    base_viewer_port: int = 3100,
+    shard_ports: list[int] | None = None,
 ) -> None:
+    """`shard_ports`, if given, spreads `n_parallel_bots` bots per port
+    across that many independent Minecraft server instances (see
+    multi_bridge.Shard) instead of putting all of them on one server at
+    the default port - see training/README.md (or just ask) for why:
+    one server's tick loop is single-threaded, so this is what actually
+    lets a training run scale past what one instance alone can sustain."""
     weights, input_idx, output_idx = load_real_graph()
     theta0 = load_initial_theta(input_idx, output_idx, init)
 
-    print(
-        f"launching {n_parallel_bots} self-training bot-bridge instances "
-        f"(generations={generations}, population_size={population_size}, episode_steps={episode_steps})..."
-    )
-    bridges = launch_bridges(n_parallel_bots)
+    if shard_ports:
+        total_bots = n_parallel_bots * len(shard_ports)
+        print(
+            f"launching {n_parallel_bots} bots on each of {len(shard_ports)} shards "
+            f"({total_bots} total) (generations={generations}, population_size={population_size}, "
+            f"episode_steps={episode_steps})..."
+        )
+        bridges = launch_shards(
+            [Shard(port=port, bots=n_parallel_bots) for port in shard_ports],
+            base_viewer_port=base_viewer_port if enable_viewers else None,
+        )
+    else:
+        print(
+            f"launching {n_parallel_bots} self-training bot-bridge instances "
+            f"(generations={generations}, population_size={population_size}, episode_steps={episode_steps})..."
+        )
+        bridges = launch_bridges(n_parallel_bots, base_viewer_port=base_viewer_port if enable_viewers else None)
+    if enable_viewers:
+        print(f"3D spectate viewers enabled starting at port {base_viewer_port} - run dashboard/server.py to watch them all in one page")
     try:
         wait_until_all_spawned(bridges)
         print("all bridges spawned:", [b.username for b in bridges])
@@ -193,7 +223,19 @@ if __name__ == "__main__":
     parser.add_argument("--episode-steps", type=int, default=150)
     parser.add_argument("--init", choices=["live", "proxy", "default"], default="live")
     parser.add_argument("--no-skins", action="store_true", help="skip cosmetic skin assignment")
+    parser.add_argument(
+        "--viewers", action="store_true", help="start a prismarine-viewer 3D spectate server per bot (see dashboard/server.py)"
+    )
+    parser.add_argument("--base-viewer-port", type=int, default=3100)
+    parser.add_argument(
+        "--shard-ports",
+        type=str,
+        default=None,
+        help="comma-separated Minecraft server ports, one per shard (e.g. 25565,25566) - "
+        "--bots then means bots PER shard, not total. Omit to use a single server as before.",
+    )
     args = parser.parse_args()
+    shard_ports = [int(p) for p in args.shard_ports.split(",")] if args.shard_ports else None
     main(
         n_parallel_bots=args.bots,
         generations=args.generations,
@@ -201,4 +243,7 @@ if __name__ == "__main__":
         episode_steps=args.episode_steps,
         init=args.init,
         assign_skins=not args.no_skins,
+        enable_viewers=args.viewers,
+        base_viewer_port=args.base_viewer_port,
+        shard_ports=shard_ports,
     )

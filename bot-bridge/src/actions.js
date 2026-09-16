@@ -372,12 +372,27 @@ async function doCraft(bot, command, mcData) {
 }
 
 const SMELT_POLL_MS = 1000;
-const SMELT_TIMEOUT_MS = 120000;
+const SMELT_MS_PER_ITEM = 15000; // real smelt time is ~10s/item; this leaves margin, not slack
+const SMELT_POLL_OVERHEAD_MS = 10000;
+// Outer safety net for index.js/ACTION_TIMEOUTS_MS - must stay generous
+// enough to not fire during a *legitimate* multi-item smelt, but every
+// caller in this project only ever requests count=1, so this used to be
+// wildly oversized for the common case (120s). Found live: whenever a
+// smelt attempt reached the furnace but didn't actually progress (bad
+// fuel/input match, a furnace another bot was already using, etc.), the
+// poll loop below burned the *entire* timeout doing nothing before giving
+// up - freezing that bot in place for up to two real minutes, which is
+// exactly what "all the bots stand still after a while" looks like from
+// outside once bots start reaching the smelting stage.
+const SMELT_TIMEOUT_MS = 45000;
 
 /** Full furnace cycle: walk to the furnace, load fuel + input, wait for the
  * smelt to finish, take the output. Smelting is genuinely slow (~10s per
  * item), which is why this has its own much longer timeout than a normal
- * action - see index.js's per-type timeouts. */
+ * action - see index.js's per-type timeouts. The inner poll deadline is
+ * scaled to how many items were actually requested (see SMELT_MS_PER_ITEM
+ * above) rather than always waiting the full outer cap - a failed/stuck
+ * smelt now gives up in well under a minute instead of two. */
 async function doSmelt(bot, command, mcData) {
   const { input, fuel, count } = command;
   const wanted = typeof count === "number" ? count : 1;
@@ -399,9 +414,9 @@ async function doSmelt(bot, command, mcData) {
     await furnace.putFuel(fuelItem.type, null, Math.min(fuelItem.count, Math.max(1, Math.ceil(wanted / 4))));
     await furnace.putInput(inputItem.type, null, Math.min(inputItem.count, wanted));
 
-    const deadline = Date.now() + SMELT_TIMEOUT_MS;
+    const pollDeadline = Date.now() + Math.min(SMELT_TIMEOUT_MS, SMELT_MS_PER_ITEM * wanted + SMELT_POLL_OVERHEAD_MS);
     let taken = 0;
-    while (Date.now() < deadline && taken < wanted) {
+    while (Date.now() < pollDeadline && taken < wanted) {
       await sleep(SMELT_POLL_MS);
       if (furnace.outputItem()) {
         const out = await furnace.takeOutput();
