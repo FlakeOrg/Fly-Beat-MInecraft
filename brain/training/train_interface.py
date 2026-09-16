@@ -238,6 +238,29 @@ if __name__ == "__main__":
 
     print(f"\nfinal trained fitness: {fitness_fn(result.theta):.3f} (best seen: {result.best_fitness:.3f})")
 
+    print("\n--- final predictions ---")
+
+    unflatten_params(result.theta, encoder, decoder)
+
+    for i, (observation, target) in enumerate(SITUATIONS):
+        net = LIFNetwork(norm_weights, lif_params)
+        ext_current = encoder.encode(observation, net.n)
+
+        spike_window = np.zeros((10, net.n))
+        for t in range(10):
+            spike_window[t] = net.step(ext_current)
+
+        predicted = decoder.decode(spike_window)
+
+        print(f"\nsituation {i + 1}")
+        print(f"  target:    {target}")
+        print(f"  predicted: {predicted}")
+
+        for action in ACTIONS:
+            if predicted[action] != target[action]:
+                print(f"  WRONG: {action} "
+                    f"(expected {target[action]}, got {predicted[action]})")
+
     unflatten_params(result.theta, encoder, decoder)
     out_path = data_dir.parent / "trained_interface.npz"
     np.savez(

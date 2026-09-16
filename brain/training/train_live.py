@@ -48,6 +48,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 OUT_PATH = DATA_DIR / "trained_interface_live.npz"
 PROXY_WEIGHTS_PATH = DATA_DIR / "trained_interface.npz"
 USE_TASK_MANAGER = False
+FREE_WILL = False  # only consulted when USE_TASK_MANAGER is True; see agent/task_manager.py
 
 
 def save_weights(theta: np.ndarray, input_idx: np.ndarray, output_idx: np.ndarray, path: Path = OUT_PATH) -> None:
@@ -180,6 +181,7 @@ def main(
                         weights,
                         bridges[worker_idx].url,
                         use_task_manager=USE_TASK_MANAGER,
+                        free_will=FREE_WILL,
                         episode_steps=episode_steps,
                     )
 

@@ -31,7 +31,7 @@ from agent.goals import MILESTONE_REWARDS, milestone_score, reached_steps  # noq
 from agent.movement import movement_command_from_actions  # noqa: E402
 from agent.self_actions import perform  # noqa: E402
 from agent.loop import ATTACKABLE_ENTITY_KINDS, LIF_PARAMS, SIM_TICKS_PER_ACTION  # noqa: E402
-from agent.task_manager import TaskManager  # noqa: E402
+from agent.task_manager import FreeWillTaskManager, TaskManager  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
 from interface.sensory_encoder import SensoryEncoder  # noqa: E402
 from sim.lif import LIFNetwork  # noqa: E402
@@ -233,11 +233,16 @@ def run_episode(
     weights,
     bridge_url: str,
     use_task_manager: bool = False,
+    free_will: bool = False,
     episode_steps: int = EPISODE_STEPS,
 ) -> float:
     """Runs one real episode against a live bot-bridge instance and returns
     an earned reward. Mutates `encoder`/`decoder` in place (via
     unflatten_params) to whatever `theta` this evaluation is for.
+
+    `use_task_manager`/`free_will` pick the task manager the same way as
+    agent/loop.py's `run()`: no task manager, the full scripted TaskManager,
+    or the safety-only FreeWillTaskManager (see agent/task_manager.py).
 
     Never raises: a long unattended run must survive one worker's bot-
     bridge process crashing or refusing a connection without taking down
@@ -245,7 +250,7 @@ def run_episode(
     propagating the exception.
     """
     try:
-        return _run_episode_inner(theta, encoder, decoder, weights, bridge_url, use_task_manager, episode_steps)
+        return _run_episode_inner(theta, encoder, decoder, weights, bridge_url, use_task_manager, free_will, episode_steps)
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
         print(f"rollout against {bridge_url} failed ({exc!r}); scoring 0.0")
         return 0.0
@@ -258,11 +263,17 @@ def _run_episode_inner(
     weights,
     bridge_url: str,
     use_task_manager: bool,
+    free_will: bool,
     episode_steps: int,
 ) -> float:
     unflatten_params(theta, encoder, decoder)
     net = LIFNetwork(weights, LIF_PARAMS)
-    task_manager = TaskManager() if use_task_manager else None
+    if not use_task_manager:
+        task_manager = None
+    elif free_will:
+        task_manager = FreeWillTaskManager()
+    else:
+        task_manager = TaskManager()
 
     with BridgeClient(bridge_url) as client:
         try:

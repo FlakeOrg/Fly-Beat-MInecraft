@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.task_manager import (  # noqa: E402
     COBBLE_TARGET,
     RAW_IRON_TARGET,
+    FreeWillTaskManager,
     TaskManager,
     WOOD_TARGET,
 )
@@ -352,3 +353,58 @@ def test_progression_is_rederived_after_losing_everything():
     fresh = FakeClient(blocks={"oak_log": [(5, 64, 0)]})
     tm.step(make_observation(inventory=[]), fresh)
     assert "mineBlock" in fresh.types()  # back to chopping wood, unprompted
+
+
+# --- FreeWillTaskManager: safety-only, no progression -----------------------
+#
+# No progression, no stage machine, and no quest logic are allowed here.
+# Only the low-health flee override is tested; everything else must be left
+# to the fly-brain and reward system.
+
+
+def test_free_will_starts_safety_only():
+    tm = FreeWillTaskManager()
+    assert tm.status == "safety_only"
+
+
+def test_free_will_no_threat_defers_to_fly_brain():
+    tm = FreeWillTaskManager()
+    client = FakeClient()
+    assert tm.step(make_observation(), client) is False
+    assert client.commands == []
+
+
+def test_free_will_low_health_near_hostile_triggers_flee():
+    tm = FreeWillTaskManager()
+    client = FakeClient()
+    obs = make_observation(
+        health=5,
+        nearbyEntities=[{"name": "zombie", "kind": "Hostile mobs", "distance": 2.0, "position": {"x": 1.0, "y": 64.0, "z": 0.0}}],
+    )
+    assert tm.step(obs, client) is True
+    assert "look" in client.types()
+    moves = client.of_type("move")
+    assert moves and moves[0]["forward"] is True
+    assert tm.status == "fleeing"
+
+
+def test_free_will_high_health_near_hostile_defers_to_fly_brain():
+    tm = FreeWillTaskManager()
+    client = FakeClient()
+    obs = make_observation(
+        health=20,
+        nearbyEntities=[{"name": "zombie", "kind": "Hostile mobs", "distance": 2.0, "position": {"x": 1.0, "y": 64.0, "z": 0.0}}],
+    )
+    assert tm.step(obs, client) is False
+    assert client.commands == []
+
+
+def test_free_will_low_health_far_from_hostile_does_not_flee():
+    tm = FreeWillTaskManager()
+    client = FakeClient()
+    obs = make_observation(
+        health=5,
+        nearbyEntities=[{"name": "zombie", "kind": "Hostile mobs", "distance": 20.0, "position": {"x": 20.0, "y": 64.0, "z": 0.0}}],
+    )
+    assert tm.step(obs, client) is False
+    assert client.commands == []

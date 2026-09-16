@@ -30,10 +30,18 @@ Two deliberate design choices worth knowing:
    query -> decide -> act round trip ("where is the nearest iron ore" ->
    "walk there" -> "mine it"), which a fire-and-forget command list can't
    express.
+
+`FreeWillTaskManager` below is the deliberate alternative: no progression
+stack at all, just the same low-health flee override, so the fly-brain and
+reward system are left to earn every bit of progress themselves. Callers
+(agent/loop.py, training/live_rollout.py) pick between the two - or neither
+- through a mode flag; both share the `step(observation, client) -> bool`
+/ `status` interface so they're interchangeable at the call site.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 LOG_NAMES = [
@@ -65,6 +73,11 @@ FIGHT_HEALTH_THRESHOLD = 14  # above this, fight back instead of fleeing
 HOSTILE_ENGAGE_DISTANCE = 6.0
 LOW_FOOD_THRESHOLD = 16
 
+# FreeWillTaskManager's own flee trigger - deliberately separate from
+# HOSTILE_ENGAGE_DISTANCE above (TaskManager's fight-or-flee radius), since
+# FreeWillTaskManager never fights back and has no health band to fight in.
+FREE_WILL_FLEE_DISTANCE = 6.0
+
 # Iron generates well below the surface; if a search at the current depth
 # finds nothing, the bot tunnels down toward this level and looks again.
 IRON_SEARCH_Y = 40
@@ -89,6 +102,11 @@ def _nearest_hostile(observation: dict) -> dict | None:
     if not hostiles:
         return None
     return min(hostiles, key=lambda e: e["distance"])
+
+
+def _yaw_towards(dx: float, dz: float) -> float:
+    """Mineflayer yaw convention: yaw=0 faces +Z, increasing yaw turns toward -X."""
+    return math.atan2(-dx, dz)
 
 
 @dataclass
@@ -388,3 +406,44 @@ class TaskManager:
             self._failures[key] = self._failures.get(key, 0) + 1
             self.status = f"{self.status} (failed: {exc})"
             return True  # still counts as "acted" - don't thrash the fly brain on a failure
+
+
+@dataclass
+class FreeWillTaskManager:
+    """No progression stack, no mission, no explicit objective: the only
+    thing it does is flee a nearby threat at low health. Everything else -
+    every bit of resource-gathering, crafting, and combat - is left for the
+    fly-brain and reward system to earn on their own. Same `step()`/`status`
+    surface as TaskManager (see module docstring) so agent/loop.py and
+    training/live_rollout.py can swap it in without any other change."""
+
+    status: str = "safety_only"
+    steps_in_stage: int = 0
+
+    def step(self, observation: dict, client) -> bool:
+        self.steps_in_stage += 1
+        commands = self._flee_if_needed(observation)
+        if commands is None:
+            return False
+        self.status = "fleeing"
+        for command in commands:
+            try:
+                client.do_action(command)
+            except Exception:
+                pass  # best-effort: a failed flee step just tries again next tick
+        return True
+
+    def _flee_if_needed(self, observation: dict) -> list[dict] | None:
+        if observation["health"] > LOW_HEALTH_THRESHOLD:
+            return None
+        hostile = _nearest_hostile(observation)
+        if hostile is None or hostile["distance"] > FREE_WILL_FLEE_DISTANCE:
+            return None
+        pos = observation["position"]
+        away_dx = pos["x"] - hostile["position"]["x"]
+        away_dz = pos["z"] - hostile["position"]["z"]
+        yaw = _yaw_towards(away_dx, away_dz)
+        return [
+            {"type": "look", "yaw": yaw, "pitch": 0.0, "relative": False},
+            {"type": "move", "forward": True, "sprint": True, "left": False, "right": False, "jump": False},
+        ]

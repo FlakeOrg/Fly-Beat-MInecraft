@@ -31,7 +31,7 @@ from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
 from agent.goals import END_GOAL, next_training_step  # noqa: E402
 from agent.movement import movement_command_from_actions  # noqa: E402
 from agent.self_actions import perform  # noqa: E402
-from agent.task_manager import TaskManager  # noqa: E402
+from agent.task_manager import FreeWillTaskManager, TaskManager  # noqa: E402
 from connectome.graph import build_adjacency, identify_pools  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
 from interface.sensory_encoder import SensoryEncoder  # noqa: E402
@@ -105,19 +105,35 @@ def run(
     bridge_url: str = "ws://localhost:8081",
     status_every: int = 10,
     use_task_manager: bool = True,
+    free_will: bool = False,
 ) -> None:
     """Runs the control loop. `n_steps=None` runs until interrupted (Ctrl+C).
 
-    Each step, the task manager gets first say (task_manager.py): if it has
-    a specific scripted subgoal action (walk to this log and mine it, craft
-    this item, flee that threat), that's what runs. Only when it has
-    nothing specific to do does control fall through to the fly-brain's
-    trained reflexes - that's the intended division of labor, not a
-    fallback of convenience.
+    Each step, the task manager gets first say (task_manager.py), and which
+    task manager depends on `free_will`:
+    - assisted (default): the full scripted TaskManager - if it has a
+      specific scripted subgoal action (walk to this log and mine it, craft
+      this item, flee that threat), that's what runs. Only when it has
+      nothing specific to do does control fall through to the fly-brain's
+      trained reflexes - that's the intended division of labor, not a
+      fallback of convenience.
+    - free will (`free_will=True`): FreeWillTaskManager, which only issues a
+      low-health flee override and otherwise always defers - every bit of
+      resource-gathering and crafting is left for the fly-brain and reward
+      system to earn on its own.
+    - self (`use_task_manager=False`): no task manager at all, not even the
+      flee override - the fly-brain runs unassisted.
     """
     net, encoder, decoder = build_brain()
-    task_manager = TaskManager() if use_task_manager else None
-    mode = "assisted" if task_manager is not None else "self"
+    if not use_task_manager:
+        task_manager = None
+        mode = "self"
+    elif free_will:
+        task_manager = FreeWillTaskManager()
+        mode = "free"
+    else:
+        task_manager = TaskManager()
+        mode = "assisted"
     print(f"connectome: {net.n} neurons, {len(encoder.input_idx)} input, {len(decoder.output_idx)} output")
     print(f"mode={mode} goal={END_GOAL}")
 
@@ -209,7 +225,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--self",
         action="store_true",
-        help="turn off scripted TaskManager help; the bot only gets observations, actions, and learned weights",
+        help="turn off the task manager entirely; the bot only gets observations, actions, and learned weights",
+    )
+    parser.add_argument(
+        "--free-will",
+        action="store_true",
+        help=(
+            "use FreeWillTaskManager (low-health flee override only) instead of the full scripted "
+            "crafting progression; ignored together with --self"
+        ),
     )
     args = parser.parse_args()
-    run(args.steps, args.bridge_url, args.status_every, use_task_manager=not args.self)
+    run(args.steps, args.bridge_url, args.status_every, use_task_manager=not args.self, free_will=args.free_will)
