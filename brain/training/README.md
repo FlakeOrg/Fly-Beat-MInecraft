@@ -18,11 +18,11 @@ Implemented (M5) — `train_interface.py`:
   `SensoryEncoder.weights` + `MotorDecoder.weights` into a single vector ES
   can optimize over.
 - `evaluate_situations()` + `SITUATIONS` — a **proxy validation task**, not
-  the real reward: 5 hand-specified (observation, correct-action) pairs
-  (explore when clear, mine what's ahead, attack a nearby hostile, do
-  nothing while falling, keep exploring even when hungry). Fitness = the
-  fraction of individual action booleans matched across all 5 situations
-  (30 total). This exists to validate that ES can actually train something
+  the real reward: hand-specified (observation, correct-action) pairs
+  (explore when clear, mine or place what's ahead, attack a nearby hostile,
+  do nothing while falling, keep exploring even when hungry). Fitness = the
+  fraction of individual action booleans matched across all situations. This
+  exists to validate that ES can actually train something
   useful on the real connectome's dynamics *before* committing to the much
   slower live-rollout reward - live Minecraft episodes are far too slow to
   evaluate thousands of times per training run the way this proxy can be.
@@ -84,3 +84,20 @@ realistically as a long unattended run. Scale `N_PARALLEL_BOTS` and
 ready to commit to that.
 
 See [../../docs/architecture.md](../../docs/architecture.md).
+
+## Training block placement
+
+The bridge has always supported the low-level `place` command. The learned
+interface now exposes `place_ahead`, which is trained when a solid block is
+ahead and the inventory contains a common placeable block. During live control
+it equips that item and places it on top of the reference block.
+
+After changing the action or feature set, regenerate the proxy checkpoint from
+the repository root with:
+
+```powershell
+python brain/training/train_interface.py
+```
+
+Then start the bot loop normally. The old checkpoint is detected as
+incompatible and ignored until the new one is written.

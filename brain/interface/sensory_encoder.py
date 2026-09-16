@@ -20,6 +20,7 @@ FEATURE_NAMES = [
     "hostile_near",
     "entity_near",
     "block_ahead",
+    "has_placeable",
     "is_falling",
     "on_ground",
 ]
@@ -50,6 +51,13 @@ HOSTILE_MOB_NAMES = {
 ENTITY_NEAR_RADIUS = 8.0
 HOSTILE_NEAR_RADIUS = 6.0
 
+PLACEABLE_ITEM_NAMES = {
+    "dirt", "grass_block", "cobblestone", "stone", "sand", "gravel",
+    "oak_planks", "spruce_planks", "birch_planks", "jungle_planks",
+    "acacia_planks", "dark_oak_planks", "mangrove_planks", "cherry_planks",
+    "netherrack", "end_stone", "bricks", "glass", "crafting_table",
+}
+
 
 def _facing_offset(yaw: float) -> tuple[int, int]:
     """Rounds the bot's horizontal facing direction to a unit grid offset,
@@ -75,13 +83,17 @@ def extract_features(observation: dict) -> np.ndarray:
     block_ahead = 1.0 if any(
         b["x"] == ahead_x and b["z"] == ahead_z and b["y"] in (0, 1) for b in observation["nearbyBlocks"]
     ) else 0.0
+    has_placeable = 1.0 if any(
+        item.get("name") in PLACEABLE_ITEM_NAMES and item.get("count", 0) > 0
+        for item in observation.get("inventory", [])
+    ) else 0.0
 
     velocity_y = observation["velocity"]["y"]
     is_falling = 1.0 if (velocity_y < -0.1 and not observation["onGround"]) else 0.0
     on_ground = 1.0 if observation["onGround"] else 0.0
 
     return np.array(
-        [1.0, health_frac, food_frac, hostile_near, entity_near, block_ahead, is_falling, on_ground],
+        [1.0, health_frac, food_frac, hostile_near, entity_near, block_ahead, has_placeable, is_falling, on_ground],
         dtype=np.float64,
     )
 

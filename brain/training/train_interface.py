@@ -142,23 +142,27 @@ def _obs(**overrides) -> dict:
 SITUATIONS: list[tuple[dict, dict[str, bool]]] = [
     (
         _obs(),
-        {"forward": True, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False},
+        {"forward": True, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False, "place_ahead": False},
+    ),
+    (
+        _obs(nearbyBlocks=[{"x": 0, "y": 0, "z": 1, "name": "stone"}], inventory=[{"name": "dirt", "count": 4}]),
+        {"forward": False, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False, "place_ahead": True},
     ),
     (
         _obs(nearbyBlocks=[{"x": 0, "y": 0, "z": 1, "name": "stone"}]),
-        {"forward": False, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": True},
+        {"forward": False, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": True, "place_ahead": False},
     ),
     (
         _obs(nearbyEntities=[{"name": "zombie", "distance": 3.0}]),
-        {"forward": False, "left": False, "right": False, "jump": False, "attack": True, "mine_ahead": False},
+        {"forward": False, "left": False, "right": False, "jump": False, "attack": True, "mine_ahead": False, "place_ahead": False},
     ),
     (
         _obs(onGround=False, velocity={"x": 0.0, "y": -0.5, "z": 0.0}),
-        {"forward": False, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False},
+        {"forward": False, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False, "place_ahead": False},
     ),
     (
         _obs(food=2),
-        {"forward": True, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False},
+        {"forward": True, "left": False, "right": False, "jump": False, "attack": False, "mine_ahead": False, "place_ahead": False},
     ),
 ]
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-ACTIONS = ["forward", "left", "right", "jump", "attack", "mine_ahead"]
+ACTIONS = ["forward", "left", "right", "jump", "attack", "mine_ahead", "place_ahead"]
 
 
 class MotorDecoder:

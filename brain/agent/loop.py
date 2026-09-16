@@ -30,7 +30,7 @@ from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
 from agent.task_manager import TaskManager  # noqa: E402
 from connectome.graph import build_adjacency, identify_pools  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
-from interface.sensory_encoder import SensoryEncoder  # noqa: E402
+from interface.sensory_encoder import PLACEABLE_ITEM_NAMES, SensoryEncoder, _facing_offset  # noqa: E402
 from sim.lif import LIFNetwork, LIFParams  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -73,11 +73,20 @@ def build_brain() -> tuple[LIFNetwork, SensoryEncoder, MotorDecoder]:
 
     if TRAINED_WEIGHTS_PATH.exists():
         saved = np.load(TRAINED_WEIGHTS_PATH)
-        assert np.array_equal(saved["input_idx"], input_idx), "trained weights don't match the current input pool"
-        assert np.array_equal(saved["output_idx"], output_idx), "trained weights don't match the current output pool"
-        encoder = SensoryEncoder(input_idx, weights=saved["encoder_weights"])
-        decoder = MotorDecoder(output_idx, weights=saved["decoder_weights"])
-        print(f"loaded trained weights from {TRAINED_WEIGHTS_PATH}")
+        encoder = SensoryEncoder(input_idx)
+        decoder = MotorDecoder(output_idx)
+        compatible = (
+            np.array_equal(saved["input_idx"], input_idx)
+            and np.array_equal(saved["output_idx"], output_idx)
+            and saved["encoder_weights"].shape == encoder.weights.shape
+            and saved["decoder_weights"].shape == decoder.weights.shape
+        )
+        if compatible:
+            encoder.weights = saved["encoder_weights"]
+            decoder.weights = saved["decoder_weights"]
+            print(f"loaded trained weights from {TRAINED_WEIGHTS_PATH}")
+        else:
+            print("trained weights are incompatible with the current interface - using fresh init")
     else:
         encoder = SensoryEncoder(input_idx)
         decoder = MotorDecoder(output_idx)
@@ -150,7 +159,8 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
 
                     if actions.get("mine_ahead"):
                         # best-effort: dig whatever's directly ahead at foot level, if anything
-                        ahead = [b for b in observation["nearbyBlocks"] if b["y"] == 0 and abs(b["x"]) + abs(b["z"]) == 1]
+                        ahead = [b for b in observation["nearbyBlocks"]
+                            if b["x"] == ahead_x and b["z"] == ahead_z]
                         if ahead:
                             pos = observation["position"]
                             b = ahead[0]
@@ -158,6 +168,45 @@ def run(n_steps: int | None = None, bridge_url: str = "ws://localhost:8081", sta
                                 client.do_action({"type": "dig", "x": pos["x"] + b["x"], "y": pos["y"], "z": pos["z"] + b["z"]})
                             except BridgeError:
                                 pass  # dig can fail for lots of legitimate reasons (out of reach, unbreakable, etc.)
+
+                    if actions.get("place_ahead"):
+                        print("🧱 FLY WANTS TO PLACE")
+
+                        ahead_x, ahead_z = _facing_offset(observation["yaw"])
+
+                        ahead = [
+                            b for b in observation["nearbyBlocks"]
+                            if b["x"] == ahead_x and b["z"] == ahead_z
+                        ]
+
+                        items = [
+                            i for i in observation.get("inventory", [])
+                            if i.get("name") in PLACEABLE_ITEM_NAMES
+                            and i.get("count", 0) > 0
+                        ]
+
+                        print(
+                            "PLACE CHECK:",
+                            "offset=", (ahead_x, ahead_z),
+                            "blocks=", [(b["x"], b["y"], b["z"], b.get("name", "?")) for b in ahead],
+                            "items=", [(i["name"], i["count"]) for i in items]
+                        )
+
+                        if ahead and items:
+                            pos = observation["position"]
+                            b = min(ahead, key=lambda block: abs(block["y"]))
+
+                            try:
+                                client.do_action({
+                                    "type": "place",
+                                    "x": int(np.floor(pos["x"]) + b["x"]),
+                                    "y": int(np.floor(pos["y"]) + b["y"]),
+                                    "z": int(np.floor(pos["z"]) + b["z"]),
+                                    "face": "up",
+                                    "item": items[0]["name"],
+                                })
+                            except BridgeError:
+                                pass
 
                 if step % status_every == 0:
                     pos = observation["position"]

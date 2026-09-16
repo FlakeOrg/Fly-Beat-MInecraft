@@ -29,7 +29,7 @@ from agent.bridge_client import BridgeClient, BridgeError  # noqa: E402
 from agent.loop import LIF_PARAMS, SIM_TICKS_PER_ACTION  # noqa: E402
 from agent.task_manager import TaskManager  # noqa: E402
 from interface.motor_decoder import MotorDecoder  # noqa: E402
-from interface.sensory_encoder import SensoryEncoder  # noqa: E402
+from interface.sensory_encoder import PLACEABLE_ITEM_NAMES, SensoryEncoder, _facing_offset  # noqa: E402
 from sim.lif import LIFNetwork  # noqa: E402
 from training.train_interface import unflatten_params  # noqa: E402
 
@@ -127,6 +127,25 @@ def _run_episode_inner(
                     client.do_action(move_command)
                 except BridgeError:
                     pass
+
+                if actions.get("place_ahead"):
+                    ahead_x, ahead_z = _facing_offset(observation["yaw"])
+                    ahead = [b for b in observation["nearbyBlocks"] if b["y"] == 0 and b["x"] == ahead_x and b["z"] == ahead_z]
+                    items = [i for i in observation.get("inventory", []) if i.get("name") in PLACEABLE_ITEM_NAMES and i.get("count", 0) > 0]
+                    if ahead and items:
+                        pos = observation["position"]
+                        b = ahead[0]
+                        try:
+                            client.do_action({
+                                "type": "place",
+                                "x": np.floor(pos["x"]) + b["x"],
+                                "y": np.floor(pos["y"]) + b["y"],
+                                "z": np.floor(pos["z"]) + b["z"],
+                                "face": "up",
+                                "item": items[0]["name"],
+                            })
+                        except BridgeError:
+                            pass
 
             time.sleep(STEP_SLEEP_S)
 
