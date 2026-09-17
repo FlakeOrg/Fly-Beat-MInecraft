@@ -1,17 +1,18 @@
-"""Descending-neuron firing rates -> a discrete Minecraft action.
+"""Descending-neuron firing rates -> discrete Minecraft and speech actions.
 
-Trainable boundary, mirror image of sensory_encoder.py. For M4 the weights
-are hand-built (an even, arbitrary partition of the output pool across
-actions) just to validate that spikes reaching the output pool turn into
-sensible-looking bot commands; M5 replaces `_default_weights` with
-something learned.
+Speech outputs are part of the decoder interface, so the simulated brain can
+select a speech intent.  SpeechController turns those intents into text while
+keeping cooldowns and server-facing policy outside the connectome.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-ACTIONS = ["forward", "left", "right", "jump", "attack", "mine_ahead", "place_ahead"]
+ACTIONS = [
+    "forward", "left", "right", "jump", "attack", "mine_ahead", "place_ahead",
+    "say_hello", "say_hungry", "say_hurt", "say_help", "say_found", "say_made",
+]
 
 
 class MotorDecoder:
@@ -31,9 +32,7 @@ class MotorDecoder:
         return weights
 
     def decode(self, spike_window: np.ndarray) -> dict[str, bool]:
-        """`spike_window`: (T, n_total) binary spike trace over the last T
-        sim ticks. Returns which of ACTIONS are "on" for this control step.
-        """
+        """Return motor and speech intents from a (T, n_total) spike trace."""
         rates = spike_window[:, self.output_idx].mean(axis=0)
         scores = self.weights @ rates
         return {action: bool(scores[i] > self.threshold) for i, action in enumerate(ACTIONS)}

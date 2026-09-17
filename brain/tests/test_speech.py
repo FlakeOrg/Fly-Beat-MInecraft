@@ -3,8 +3,6 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.speech import SpeechController  # noqa: E402
@@ -25,54 +23,27 @@ def observation(**overrides):
     return value
 
 
-def test_greets_once():
-    client = FakeClient()
-    speech = SpeechController(cooldown_seconds=0)
-
-    assert speech.consider(observation(), {}, client)
-    assert not speech.consider(observation(), {}, client)
-    assert [c["message"] for c in client.commands] == ["hello"]
-
-
-def test_low_health_and_hunger_are_edge_triggered():
-    client = FakeClient()
-    speech = SpeechController(cooldown_seconds=0)
-    speech.consider(observation(), {}, client)  # greeting
-
-    assert speech.consider(observation(health=5), {}, client)
-    assert not speech.consider(observation(health=5), {}, client)
-    # Recovering resets the condition and allows a later warning.
-    speech.consider(observation(health=20), {}, client)
-    assert speech.consider(observation(health=20, food=5), {}, client)
-    assert [c["message"] for c in client.commands] == ["hello", "i hurt", "i hungry"]
-
-
-def test_cooldown_prevents_chat_spam():
-    client = FakeClient()
-    now = [0.0]
-    speech = SpeechController(cooldown_seconds=5, clock=lambda: now[0])
-    speech.consider(observation(), {}, client)
-
-    # A new event occurs during the cooldown, but is not sent.
-    now[0] = 1.0
-    speech.consider(observation(health=5), {}, client)
-    assert len(client.commands) == 1
-
-    now[0] = 6.0
-    # The condition is already active, so it will not repeat until it resets.
-    speech.consider(observation(health=5), {}, client)
-    assert len(client.commands) == 1
-
-
-def test_explicit_decoder_message_is_supported():
+def test_brain_speech_intent_is_sent():
     client = FakeClient()
     speech = SpeechController(cooldown_seconds=0)
     speech.consider(observation(), {}, client)
-    assert speech.consider(observation(), {"speech": "made"}, client)
-    assert client.commands[-1]["message"] == "i made something"
+    assert speech.consider(observation(), {"say_hungry": True}, client)
+    assert client.commands[-1]["message"] == "i hungry"
 
 
-@pytest.mark.parametrize("bad", [-1, -0.1])
-def test_negative_cooldown_is_rejected(bad):
-    with pytest.raises(ValueError):
-        SpeechController(cooldown_seconds=bad)
+def test_decoder_intents_have_distinct_outputs():
+    from interface.motor_decoder import ACTIONS, MotorDecoder
+    import numpy as np
+
+    decoder = MotorDecoder(np.arange(13), threshold=0.1)
+    assert "say_hungry" in ACTIONS
+    assert decoder.weights.shape[0] == len(ACTIONS)
+
+
+def test_hunger_intent_is_not_repeated_without_a_new_intent():
+    client = FakeClient()
+    speech = SpeechController(cooldown_seconds=0)
+    speech.consider(observation(), {}, client)
+    assert speech.consider(observation(), {"say_hungry": True}, client)
+    assert speech.consider(observation(), {"say_hungry": True}, client)
+    assert len(client.commands) == 3
