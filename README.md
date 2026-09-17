@@ -24,7 +24,7 @@ So this project is a **hybrid**:
   that uses the fly brain as its "motor cortex."
 
 This is called out up front rather than overselling "the fly beats the game
-unaided" — it doesn't, and no real fly could.
+unaided" — it doesn't, and no real fly could (or could it?)
 
 ## Architecture
 
